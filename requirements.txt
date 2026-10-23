@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+# V6 (vuln): an intentionally old, known-vulnerable pin. The Blue Team's fix
+# is to bump this to a patched version (see requirements-secure.txt). The
+# dependency-scanning job flags it; the exploit confirms it is reachable.
+python-multipart==0.0.6
+httpx==0.28.1
+pyyaml==6.0.2
+jsonschema==4.23.0

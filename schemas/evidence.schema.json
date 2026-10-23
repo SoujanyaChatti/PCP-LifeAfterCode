@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://proof-carrying-pipeline/schemas/evidence.schema.json",
+  "title": "Evidence Record",
+  "description": "The deterministic result of a single check run against an authoritative source. Stores the exact query, a hash of the raw response, what was observed, and the verdict, so anyone can re-run it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["check_id", "claim_id", "source", "query", "response_sha256", "observed", "subject_sha", "verdict", "reason", "checked_at"],
+  "properties": {
+    "check_id": {
+      "type": "string",
+      "description": "Stable id of the check that produced this record, e.g. 'verify.junit_all_passed'."
+    },
+    "claim_id": {
+      "type": "string",
+      "description": "UUID of the claim this check was run for."
+    },
+    "source": {
+      "type": "string",
+      "description": "Authoritative source the evidence came from. Never a file an agent wrote in the same job.",
+      "enum": ["gitlab_api", "container_registry", "cloud_run", "cloud_monitoring", "http_probe", "exploit_replay", "local_artifact"]
+    },
+    "query": {
+      "type": "string",
+      "description": "The exact query/request made against the source."
+    },
+    "response_sha256": {
+      "type": "string",
+      "description": "SHA-256 of the canonicalized raw response, for reproducibility."
+    },
+    "observed": {
+      "type": "object",
+      "description": "The facts actually observed from the source.",
+      "additionalProperties": true
+    },
+    "subject_sha": {
+      "type": "string",
+      "description": "Commit SHA this evidence applies to. Must match the claim subject."
+    },
+    "subject_digest": {
+      "type": ["string", "null"],
+      "description": "Image digest this evidence applies to, if relevant."
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "INCONCLUSIVE"]
+    },
+    "reason": {
+      "type": "string",
+      "description": "Short human-readable justification for the verdict."
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Optional tags, e.g. 'claim_mismatch' for a caught false claim."
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

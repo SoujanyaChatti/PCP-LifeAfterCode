@@ -1,0 +1,15 @@
+# Ownership boundary — the trust-critical core.
+#
+# Build/patch agents MUST NOT be able to alter the deterministic checks,
+# the exploit playbook, the claim/evidence schemas, or the gate wiring.
+# These paths require review from the human owner. Combined with a protected
+# `main` branch, this is the technical backbone of the "can't lie" trust model.
+#
+# Replace @owner with the real GitLab username before going public.
+
+/verifier/      @owner
+/redteam/       @owner
+/schemas/       @owner
+/flows/         @owner
+/.gitlab-ci.yml @owner
+/CODEOWNERS     @owner

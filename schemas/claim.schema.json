@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://proof-carrying-pipeline/schemas/claim.schema.json",
+  "title": "Agent Claim",
+  "description": "A structured claim emitted by an agent at a stage gate. Free-text summaries are never used for gating; only this structured claim is.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claim_id", "type", "agent", "stage", "subject", "statement", "asserted", "created_at"],
+  "properties": {
+    "claim_id": {
+      "type": "string",
+      "description": "UUID uniquely identifying this claim."
+    },
+    "type": {
+      "type": "string",
+      "description": "Claim type; must match a key in verifier/catalogue.yaml.",
+      "enum": [
+        "plan.ready",
+        "code.ready",
+        "tests.pass",
+        "pipeline.green",
+        "vuln.fixed",
+        "image.built",
+        "deploy.healthy"
+      ]
+    },
+    "agent": {
+      "type": "string",
+      "description": "Name of the agent that emitted the claim.",
+      "enum": ["planner", "builder", "pipeline_fixer", "redteam", "blueteam", "release", "reporter"]
+    },
+    "stage": {
+      "type": "string",
+      "description": "DevSecOps stage the claim belongs to."
+    },
+    "subject": {
+      "type": "object",
+      "description": "The exact artifact this claim applies to. Evidence for a different SHA or digest is rejected.",
+      "additionalProperties": true,
+      "required": ["project_id", "commit_sha"],
+      "properties": {
+        "project_id": {"type": "integer"},
+        "mr_iid": {"type": ["integer", "null"]},
+        "issue_iid": {"type": ["integer", "null"]},
+        "commit_sha": {"type": "string"},
+        "image_digest": {"type": ["string", "null"]},
+        "pipeline_id": {"type": ["integer", "null"]},
+        "staging_url": {"type": ["string", "null"]}
+      }
+    },
+    "statement": {
+      "type": "string",
+      "description": "Human-readable statement. Informational only — never used for gating."
+    },
+    "asserted": {
+      "type": "object",
+      "description": "The structured numbers/facts the agent asserts. The verifier compares these against observed evidence; a mismatch beyond tolerance is a caught lie.",
+      "additionalProperties": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
