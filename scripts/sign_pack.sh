@@ -1,37 +1,46 @@
 #!/usr/bin/env bash
-# Sign the canonicalized evidence pack with Sigstore cosign.
+# Sign the canonicalized evidence pack with Sigstore cosign, keyless.
 #
-# Prefers keyless mode (OIDC from the CI job identity) so no long-lived key is
-# stored. Falls back to a CI-managed key if keyless is unavailable. Produces a
-# detached signature (.sig) and, in keyless mode, a certificate (.pem).
+# In GitLab CI the job declares `id_tokens: SIGSTORE_ID_TOKEN: aud: sigstore`;
+# cosign exchanges it for a short-lived certificate bound to this project's
+# pipeline identity and records the signature in the public Rekor
+# transparency log. No signing key exists anywhere. Output: a bundle holding
+# the signature, certificate and transparency-log entry.
+#
+# Fails closed: without cosign + an OIDC token it refuses, unless
+# PCP_ALLOW_UNSIGNED=1 (local rehearsal only), in which case it writes a bare
+# SHA-256 digest and says plainly that the pack is UNSIGNED.
 #
 # Usage: scripts/sign_pack.sh evidence-pack.json.canonical
 set -euo pipefail
 
 BLOB="${1:-evidence-pack.json.canonical}"
-SIG="${BLOB%.canonical}.sig"
-CERT="${BLOB%.canonical}.pem"
+BASE="${BLOB%.canonical}"
+BUNDLE="${BASE}.bundle"
 
-if ! command -v cosign >/dev/null 2>&1; then
-  echo "cosign not installed; skipping signing (demo fallback)." >&2
-  # Fallback for local demos without cosign: a plain sha256 'signature'.
-  sha256sum "$BLOB" | awk '{print $1}' > "$SIG"
-  echo "wrote unsigned digest to $SIG (install cosign for real signatures)"
+sha256() { python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
+
+if command -v cosign >/dev/null 2>&1 && [ -n "${SIGSTORE_ID_TOKEN:-}" ]; then
+  echo "Signing keyless with the CI job's OIDC identity ..."
+  cosign sign-blob --yes --bundle "$BUNDLE" "$BLOB"
+  python3 - "$BUNDLE" <<'PY'
+import json, sys
+b = json.load(open(sys.argv[1]))
+idx = (b.get("rekorBundle", {}).get("Payload", {}).get("logIndex")
+       or next((e.get("logIndex") for e in b.get("verificationMaterial", {}).get("tlogEntries", [])), None))
+if idx is not None:
+    print(f"Rekor transparency log entry: https://search.sigstore.dev/?logIndex={idx}")
+    open(sys.argv[1] + ".rekor", "w").write(str(idx))
+PY
+  echo "Signed: $BUNDLE"
   exit 0
 fi
 
-if [ "${COSIGN_KEYLESS:-1}" = "1" ] && [ -n "${SIGSTORE_ID_TOKEN:-${CI_JOB_JWT_V2:-}}" ]; then
-  echo "Signing keyless (OIDC) ..."
-  COSIGN_EXPERIMENTAL=1 cosign sign-blob --yes \
-    --output-signature "$SIG" \
-    --output-certificate "$CERT" \
-    "$BLOB"
-  echo "Signed: $SIG (+ cert $CERT)"
-else
-  echo "Signing with CI-managed key ..."
-  cosign sign-blob --yes \
-    --key "${COSIGN_KEY:-cosign.key}" \
-    --output-signature "$SIG" \
-    "$BLOB"
-  echo "Signed: $SIG"
+if [ "${PCP_ALLOW_UNSIGNED:-0}" = "1" ]; then
+  sha256 "$BLOB" > "${BASE}.unsigned-digest"
+  echo "UNSIGNED: no cosign/OIDC here; wrote a plain digest (local rehearsal only)."
+  exit 0
 fi
+
+echo "ERROR: cannot sign (cosign missing or no SIGSTORE_ID_TOKEN). Refusing to emit an unsigned pack." >&2
+exit 1

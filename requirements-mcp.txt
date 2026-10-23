@@ -1,0 +1,3 @@
+# Only for running the MCP servers in mcp_tools/ (Duo Agentic Chat / IDE).
+-r requirements.txt
+mcp==1.2.0

@@ -5,7 +5,16 @@
   "description": "A structured claim emitted by an agent at a stage gate. Free-text summaries are never used for gating; only this structured claim is.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["claim_id", "type", "agent", "stage", "subject", "statement", "asserted", "created_at"],
+  "required": [
+    "claim_id",
+    "type",
+    "agent",
+    "stage",
+    "subject",
+    "statement",
+    "asserted",
+    "created_at"
+  ],
   "properties": {
     "claim_id": {
       "type": "string",
@@ -27,7 +36,15 @@
     "agent": {
       "type": "string",
       "description": "Name of the agent that emitted the claim.",
-      "enum": ["planner", "builder", "pipeline_fixer", "redteam", "blueteam", "release", "reporter"]
+      "enum": [
+        "planner",
+        "builder",
+        "pipeline_fixer",
+        "redteam",
+        "blueteam",
+        "release",
+        "reporter"
+      ]
     },
     "stage": {
       "type": "string",
@@ -37,20 +54,58 @@
       "type": "object",
       "description": "The exact artifact this claim applies to. Evidence for a different SHA or digest is rejected.",
       "additionalProperties": true,
-      "required": ["project_id", "commit_sha"],
+      "required": [
+        "project_id",
+        "commit_sha"
+      ],
       "properties": {
-        "project_id": {"type": "integer"},
-        "mr_iid": {"type": ["integer", "null"]},
-        "issue_iid": {"type": ["integer", "null"]},
-        "commit_sha": {"type": "string"},
-        "image_digest": {"type": ["string", "null"]},
-        "pipeline_id": {"type": ["integer", "null"]},
-        "staging_url": {"type": ["string", "null"]}
+        "project_id": {
+          "type": "integer"
+        },
+        "mr_iid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "issue_iid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "commit_sha": {
+          "type": "string"
+        },
+        "image_digest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pipeline_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "staging_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "service_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "statement": {
       "type": "string",
-      "description": "Human-readable statement. Informational only — never used for gating."
+      "description": "Human-readable statement. Informational only \u2014 never used for gating."
     },
     "asserted": {
       "type": "object",

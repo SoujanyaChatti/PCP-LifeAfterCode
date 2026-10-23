@@ -1,0 +1,13 @@
+# Publish the Duo Agent Platform flows and agents in duo/ to the GitLab AI
+# Catalog. The component validates them against GitLab's schemas on every
+# pipeline and syncs them on tag pipelines (git tag v0.1.0 && git push --tags).
+#
+# Needs CATALOG_SYNC_TOKEN (project access token, `api`, Maintainer). Items are
+# created but not auto-enabled; enable the flow in the project UI
+# (Automate > Flows), which also adds its triggers.
+include:
+  - component: $CI_SERVER_FQDN/components/ai-catalog/catalog-sync@0.0.32
+    inputs:
+      agent_directory: duo/agents
+      flow_directory: duo/flows
+      enable_in_project: 'false'

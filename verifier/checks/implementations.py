@@ -7,7 +7,7 @@ as FAIL for promotion (fail closed).
 """
 from __future__ import annotations
 
-from verifier.core import FAIL, INCONCLUSIVE, PASS, check, evidence
+from verifier.core import FAIL, INCONCLUSIVE, PASS, check, evidence, sha_matches
 
 # --------------------------------------------------------------------------
 # plan.ready
@@ -73,7 +73,7 @@ def code_head_sha_matches(claim, source, tol):
     mr = source.mr(claim["subject"].get("mr_iid"))
     head = (mr.get("sha") or "")
     claimed = claim["subject"].get("commit_sha", "")
-    ok = bool(head) and head.startswith(claimed[:12]) or claimed.startswith(head[:12]) if head else False
+    ok = sha_matches(head, claimed)
     return evidence(
         "code.head_sha_matches", claim, source="gitlab_api", query="GET mr.sha",
         raw_response=mr, observed={"mr_sha": head, "claimed_sha": claimed},
@@ -97,15 +97,27 @@ def tests_junit_zero_failures(claim, source, tol):
         )
     failed = report.get("failed_count", report.get("failed"))
     total = report.get("total_count", report.get("total"))
+    passed = (total - failed) if (total is not None and failed is not None) else None
     asserted = claim.get("asserted", {})
     a_failed = asserted.get("tests_failed")
     a_passed = asserted.get("tests_passed")
-    observed = {"total": total, "failed": failed, "asserted_failed": a_failed, "asserted_passed": a_passed}
+    report_sha = report.get("commit_sha")
+    observed = {"total": total, "failed": failed, "passed": passed,
+                "asserted_failed": a_failed, "asserted_passed": a_passed,
+                "report_sha": report_sha}
 
     if failed is None:
         return evidence("tests.junit_zero_failures", claim, source="gitlab_api",
                         query="GET pipeline test_report", raw_response=report,
                         observed=observed, verdict=INCONCLUSIVE, reason="report missing failed count")
+
+    # Evidence binding: a report recorded for a different commit is rejected.
+    if report_sha and not sha_matches(report_sha, claim["subject"].get("commit_sha")):
+        return evidence("tests.junit_zero_failures", claim, source="gitlab_api",
+                        query="GET pipeline test_report", raw_response=report,
+                        observed=observed, verdict=FAIL,
+                        reason=f"test report is for commit {report_sha[:12]}, not the claimed commit",
+                        tags=["claim_mismatch"])
 
     # Caught lie: agent asserts 0 failures but the report shows failures.
     if a_failed is not None and a_failed != failed:
@@ -113,6 +125,13 @@ def tests_junit_zero_failures(claim, source, tol):
                         query="GET pipeline test_report", raw_response=report,
                         observed=observed, verdict=FAIL,
                         reason=f"claim asserts {a_failed} failures but report shows {failed}",
+                        tags=["claim_mismatch"])
+    # Caught lie: agent inflates the number of passing tests.
+    if a_passed is not None and passed is not None and a_passed != passed:
+        return evidence("tests.junit_zero_failures", claim, source="gitlab_api",
+                        query="GET pipeline test_report", raw_response=report,
+                        observed=observed, verdict=FAIL,
+                        reason=f"claim asserts {a_passed} passing tests but report shows {passed}",
                         tags=["claim_mismatch"])
     if failed != 0:
         return evidence("tests.junit_zero_failures", claim, source="gitlab_api",
@@ -181,7 +200,7 @@ def pipeline_latest_succeeded(claim, source, tol):
     status = pl.get("status")
     sha = pl.get("sha", "")
     claimed = claim["subject"].get("commit_sha", "")
-    sha_ok = (not claimed) or (not sha) or sha.startswith(claimed[:12]) or claimed.startswith(sha[:12])
+    sha_ok = sha_matches(sha, claimed)
     observed = {"status": status, "pipeline_sha": sha}
     if not pl:
         return evidence("pipeline.latest_succeeded", claim, source="gitlab_api",
@@ -235,13 +254,35 @@ def image_built_from_claimed_sha(claim, source, tol):
     img = source.registry_image(digest)
     label_sha = img.get("labels", {}).get("commit_sha", "")
     claimed = claim["subject"].get("commit_sha", "")
-    ok = bool(label_sha) and (label_sha.startswith(claimed[:12]) or claimed.startswith(label_sha[:12]))
+    ok = sha_matches(label_sha, claimed)
     return evidence("image.built_from_claimed_sha", claim, source="container_registry",
                     query=f"image labels for {digest}", raw_response=img,
                     observed={"label_sha": label_sha, "claimed_sha": claimed},
                     verdict=PASS if ok else (INCONCLUSIVE if not img else FAIL),
                     reason="image built from claimed SHA" if ok else "image SHA label mismatch",
                     tags=[] if ok else ["claim_mismatch"])
+
+
+@check("image.is_hardened_build")
+def image_is_hardened_build(claim, source, tol):
+    """The digest being promoted must be the hardened build, never the
+    pre-patch twin the Red Team attacks (both come from the same commit)."""
+    digest = claim["subject"].get("image_digest", "")
+    img = source.registry_image(digest)
+    labels = img.get("labels", {})
+    mode = labels.get("secure_mode", "")
+    ok = mode == "1"
+    if not img:
+        verdict = INCONCLUSIVE
+    else:
+        verdict = PASS if ok else FAIL
+    return evidence("image.is_hardened_build", claim, source="container_registry",
+                    query=f"image labels for {digest}", raw_response=img,
+                    observed={"secure_mode": mode, "unpatched": labels.get("unpatched", "")},
+                    verdict=verdict,
+                    reason="hardened build (dev.pcp.secure-mode=1)" if ok
+                    else "digest is the pre-patch twin, not the hardened build",
+                    tags=[] if ok or not img else ["claim_mismatch"])
 
 
 # --------------------------------------------------------------------------
@@ -270,12 +311,40 @@ def vuln_regression_test_present(claim, source, tol):
     needed = claim.get("asserted", {}).get("regression_test", "")
     tests = source.regression_tests()
     ok = needed in tests if needed else len(tests) > 0
-    return evidence("vuln.regression_test_present", claim, source="gitlab_api",
+    return evidence("vuln.regression_test_present", claim, source="pytest_collect",
                     query="collected regression tests", raw_response={"tests": tests},
                     observed={"needed": needed, "present": ok},
                     verdict=PASS if ok else FAIL,
                     reason="regression test present and collected" if ok
                     else "no matching regression test found")
+
+
+@check("vuln.regression_test_discriminates")
+def vuln_regression_test_discriminates(claim, source, tol):
+    """Fail-before / pass-after: the regression test must FAIL against the
+    pre-patch build and PASS against the patched build. A test that passes on
+    both (e.g. `assert True`) proves nothing and is rejected as a false claim."""
+    needed = claim.get("asserted", {}).get("regression_test", "")
+    proof = source.regression_proof()
+    res = proof.get(needed) if needed else None
+    if not res:
+        return evidence("vuln.regression_test_discriminates", claim, source="pytest_run",
+                        query=f"run {needed} on pre-patch and patched builds",
+                        raw_response=proof, observed={"test": needed},
+                        verdict=INCONCLUSIVE, reason="no fail-before/pass-after run for this test")
+    pre, post = res.get("pre_patch"), res.get("post_patch")
+    observed = {"test": needed, "pre_patch": pre, "post_patch": post}
+    if pre == "failed" and post == "passed":
+        verdict, reason, tags = PASS, "test fails on the pre-patch build and passes on the patch", []
+    elif pre == "passed" and post == "passed":
+        verdict, reason, tags = (FAIL, "test passes on the vulnerable build too; it does not "
+                                 "detect the weakness", ["claim_mismatch"])
+    else:
+        verdict, reason, tags = FAIL, f"pre-patch {pre}, post-patch {post}", []
+    return evidence("vuln.regression_test_discriminates", claim, source="pytest_run",
+                    query=f"run {needed} on pre-patch and patched builds",
+                    raw_response=res, observed=observed, verdict=verdict,
+                    reason=reason, tags=tags)
 
 
 # --------------------------------------------------------------------------
@@ -296,7 +365,7 @@ def deploy_serves_claimed_digest(claim, source, tol):
 
 @check("deploy.health_probes_pass")
 def deploy_health_probes_pass(claim, source, tol):
-    url = claim["subject"].get("staging_url") or ""
+    url = claim["subject"].get("service_url") or claim["subject"].get("staging_url") or ""
     n = int(tol.get("health_probes_required", 5))
     probes = source.health_probes(url, n)
     good = sum(1 for c in probes if c == 200)
@@ -310,16 +379,21 @@ def deploy_health_probes_pass(claim, source, tol):
 
 @check("deploy.error_rate_below_threshold")
 def deploy_error_rate_below_threshold(claim, source, tol):
-    rate = source.error_rate("production")
+    raw = source.error_rate("production")
     thresh = tol.get("error_rate_max", 0.02)
+    # Sources return a bare rate (fixtures) or {"rate", "requests", "source"}.
+    detail = raw if isinstance(raw, dict) else {"rate": raw}
+    rate = detail.get("rate")
     if rate is None:
         return evidence("deploy.error_rate_below_threshold", claim, source="cloud_monitoring",
-                        query="error rate (5m)", raw_response={"error_rate": rate},
+                        query="error rate (5m)", raw_response={"error_rate": raw},
                         observed={"error_rate": None, "threshold": thresh},
                         verdict=INCONCLUSIVE, reason="no error-rate metric available")
     ok = rate <= thresh
-    return evidence("deploy.error_rate_below_threshold", claim, source="cloud_monitoring",
-                    query="error rate (5m)", raw_response={"error_rate": rate},
-                    observed={"error_rate": rate, "threshold": thresh},
+    return evidence("deploy.error_rate_below_threshold", claim,
+                    source=detail.get("source", "cloud_monitoring"),
+                    query="error rate (5m)", raw_response={"error_rate": raw},
+                    observed={"error_rate": rate, "requests": detail.get("requests"),
+                              "threshold": thresh},
                     verdict=PASS if ok else FAIL,
-                    reason=f"error rate {rate} vs threshold {thresh}")
+                    reason=f"error rate {rate:.4f} vs threshold {thresh}")

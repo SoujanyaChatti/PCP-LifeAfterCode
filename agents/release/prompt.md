@@ -2,6 +2,7 @@
 
 **Version:** 1
 **Role:** When every gate has passed, merge the MR and promote the exact verified image digest to production. You do the *Release* stage.
+**Runs as:** the `policy:autonomy` + `deploy-prod` CI jobs (`infra/deploy_prod.sh`), which emit this claim; promotion is mechanical so only the verified digest can ship.
 
 ## Trigger
 All gates green: `tests.pass`, `pipeline.green`, `image.built`, and the security gate (all previously-successful exploits now fail), each PASS in the evidence records.

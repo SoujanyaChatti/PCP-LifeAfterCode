@@ -1,7 +1,8 @@
 # Infrastructure as code for the Proof-Carrying Pipeline on Google Cloud.
-# Covers: Artifact Registry, the production Cloud Run service, a deploy service
-# account, and Workload Identity Federation so GitLab CI authenticates by OIDC
-# with no long-lived key. Ephemeral per-MR staging services are created/destroyed
+# Covers: Artifact Registry, the production Cloud Run service, two service
+# accounts (a deployer, and a READ-ONLY verifier: no identity can both deploy
+# and verify), and Workload Identity Federation so GitLab CI authenticates by
+# OIDC with no long-lived key. Ephemeral per-MR staging services are created/destroyed
 # by the pipeline (infra/deploy_staging.sh), not by Terraform, so they stay cheap.
 #
 # One-command stand-up:  cd infra && terraform init && terraform apply
@@ -32,7 +33,9 @@ resource "google_project_service" "services" {
   for_each = toset([
     "run.googleapis.com",
     "artifactregistry.googleapis.com",
+    "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "sts.googleapis.com",
     "monitoring.googleapis.com",
     "logging.googleapis.com",
   ])
@@ -64,6 +67,19 @@ resource "google_project_iam_member" "deployer_sa_user" {
   member  = "serviceAccount:${google_service_account.deployer.email}"
 }
 
+# The verifier only reads: which revision serves traffic, and request metrics.
+resource "google_service_account" "verifier" {
+  account_id   = "pcp-verifier"
+  display_name = "PCP verifier (read-only)"
+}
+
+resource "google_project_iam_member" "verifier_ro" {
+  for_each = toset(["roles/run.viewer", "roles/monitoring.viewer"])
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.verifier.email}"
+}
+
 resource "google_project_iam_member" "deployer_ar" {
   project = var.project_id
   role    = "roles/artifactregistry.writer"
@@ -81,14 +97,22 @@ resource "google_iam_workload_identity_pool_provider" "gitlab" {
   workload_identity_pool_provider_id = "gitlab-oidc"
   display_name                       = "GitLab OIDC"
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.project_path" = "assertion.project_path"
+    "google.subject"           = "assertion.sub"
+    "attribute.project_path"   = "assertion.project_path"
+    "attribute.namespace_path" = "assertion.namespace_path"
+    "attribute.ref"            = "assertion.ref"
   }
-  oidc { issuer_uri = "https://gitlab.com" }
+  # gitlab.com is a shared issuer: only tokens minted for THIS project count.
+  attribute_condition = "assertion.project_path == \"${var.gitlab_project_path}\""
+  oidc {
+    issuer_uri        = "https://gitlab.com"
+    allowed_audiences = ["https://gitlab.com"]
+  }
 }
 
 resource "google_service_account_iam_member" "wif_bind" {
-  service_account_id = google_service_account.deployer.name
+  for_each           = { deployer = google_service_account.deployer.name, verifier = google_service_account.verifier.name }
+  service_account_id = each.value
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.gitlab.name}/attribute.project_path/${var.gitlab_project_path}"
 }
@@ -101,12 +125,12 @@ resource "google_cloud_run_v2_service" "prod" {
   template {
     containers {
       image = "us-docker.pkg.dev/cloudrun/container/hello"
-      env {
-        name  = "SECURE_MODE"
-        value = "1"
-      }
     }
     max_instance_request_concurrency = 80
+  }
+  # The pipeline promotes verified digests; Terraform must not revert them.
+  lifecycle {
+    ignore_changes = [template, client, client_version, labels]
   }
   depends_on = [google_project_service.services]
 }
@@ -126,3 +150,16 @@ output "wif_provider" {
   value = google_iam_workload_identity_pool_provider.gitlab.name
 }
 output "deployer_sa" { value = google_service_account.deployer.email }
+output "verifier_sa" { value = google_service_account.verifier.email }
+
+output "gitlab_ci_variables" {
+  description = "Paste into GitLab > Settings > CI/CD > Variables"
+  value = <<-EOT
+    GCP_PROJECT=${var.project_id}
+    GCP_REGION=${var.region}
+    GCP_WIF_PROVIDER=${google_iam_workload_identity_pool_provider.gitlab.name}
+    GCP_DEPLOY_SA=${google_service_account.deployer.email}
+    GCP_VERIFIER_SA=${google_service_account.verifier.email}
+    PROD_URL=${google_cloud_run_v2_service.prod.uri}
+  EOT
+}

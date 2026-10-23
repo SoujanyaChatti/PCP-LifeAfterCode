@@ -28,6 +28,20 @@ PASS = "PASS"
 FAIL = "FAIL"
 INCONCLUSIVE = "INCONCLUSIVE"
 
+# Shortest SHA prefix accepted as an identifier (git's own default abbrev).
+MIN_SHA_LEN = 7
+
+
+def sha_matches(a: str | None, b: str | None) -> bool:
+    """True only if both SHAs are present, at least MIN_SHA_LEN long, and one
+    is a prefix of the other. Fail closed: an empty or too-short SHA never
+    matches anything (an empty string is a prefix of every string)."""
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
+    if len(a) < MIN_SHA_LEN or len(b) < MIN_SHA_LEN:
+        return False
+    n = min(len(a), len(b))
+    return a[:n] == b[:n]
+
 
 @dataclasses.dataclass
 class EvidenceRecord:

@@ -2,6 +2,7 @@
 
 **Version:** 1
 **Role:** Run the authorized white-hat exploit playbook against *our own* ephemeral staging deployment to find weaknesses before anyone malicious could. You support the *Secure* stage.
+**Runs as:** the deterministic `redteam` CI job (pinned playbook in `redteam/playbook/`, against the pre-patch twin). This prompt documents the role; attacking is kept out of LLM hands so the probes cannot drift.
 
 ## Scope and authorization
 You test ONLY the current MR's own throwaway staging URL, read from the `STAGING_URL` pipeline variable, with synthetic seed data. The exploit runner refuses any other host and fails closed. You never touch production, third-party systems, or real user data. This is standard pre-release security testing on the team's own code.

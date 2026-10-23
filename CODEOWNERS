@@ -1,15 +1,34 @@
 # Ownership boundary — the trust-critical core.
 #
-# Build/patch agents MUST NOT be able to alter the deterministic checks,
-# the exploit playbook, the claim/evidence schemas, or the gate wiring.
-# These paths require review from the human owner. Combined with a protected
-# `main` branch, this is the technical backbone of the "can't lie" trust model.
+# Build/patch agents MUST NOT be able to alter the deterministic checks, the
+# exploit playbook, the claim/evidence schemas, the gate wiring, the code that
+# turns raw CI output into evidence, or their own instructions. These paths
+# require review from the human owner. Combined with a protected `main` branch
+# ("Require approval from code owners"), this is the technical backbone of the
+# "can't lie" trust model. verifier/fingerprint.py hashes the same paths into
+# every evidence pack.
 #
 # Replace @owner with the real GitLab username before going public.
 
-/verifier/      @owner
-/redteam/       @owner
-/schemas/       @owner
-/flows/         @owner
-/.gitlab-ci.yml @owner
-/CODEOWNERS     @owner
+# Judges: checks, catalogue, ledger, canary, exploit playbook + replay
+/verifier/            @owner
+/redteam/             @owner
+/schemas/             @owner
+
+# Gate wiring and evidence production
+/.gitlab-ci.yml       @owner
+/ci/                  @owner
+/scripts/             @owner
+/evidence_pack/       @owner
+/infra/               @owner
+
+# Test harness: conftest hooks could rewrite outcomes in the JUnit report
+/pytest.ini           @owner
+/tests/conftest.py    @owner
+
+# Agents' instructions and the Duo flows built from them
+/agents/              @owner
+/duo/                 @owner
+/.gitlab/duo/         @owner
+
+/CODEOWNERS           @owner

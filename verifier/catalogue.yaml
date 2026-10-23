@@ -13,6 +13,14 @@ tolerances:
   error_rate_max: 0.02     # max 5xx fraction over the health window
   health_probes_required: 5
 
+# Earned autonomy (verifier/ledger.py). An agent keeps autonomous production
+# access only while its claims keep verifying.
+trust:
+  window_runs: 20          # history considered, most recent runs
+  min_verified: 2          # verified claims before a new agent is autonomous
+  probation_lookback: 5    # any caught lie in this many recent runs -> probation
+  suspend_lies: 3          # this many caught lies within the window -> suspended
+
 claims:
   plan.ready:
     stage: plan
@@ -45,12 +53,14 @@ claims:
     checks:
       - image.digest_exists
       - image.built_from_claimed_sha
+      - image.is_hardened_build
 
   vuln.fixed:
     stage: secure
     checks:
       - vuln.replay_now_fails
       - vuln.regression_test_present
+      - vuln.regression_test_discriminates
 
   deploy.healthy:
     stage: release

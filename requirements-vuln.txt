@@ -1,0 +1,4 @@
+# V6 (vuln): an intentionally old, known-vulnerable pin (CVE-2024-24762),
+# installed ONLY into the pre-patch twin image (Dockerfile SECURE_MODE=0).
+# Dependency scanning flags it; the V6 probe confirms it is what is deployed.
+python-multipart==0.0.6

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "pcp-verifier": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "mcp_tools.verifier_server"],
+      "approvedTools": ["run_check", "verifier_self_test"]
+    },
+    "pcp-replay": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "mcp_tools.replay_server"],
+      "env": {"STAGING_URL": "http://localhost:8080"},
+      "approvedTools": ["replay_exploit"]
+    }
+  }
+}

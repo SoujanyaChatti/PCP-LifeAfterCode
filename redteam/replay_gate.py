@@ -4,10 +4,12 @@ patched staging and decide the security gate.
     python -m redteam.replay_gate --staging $STAGING_URL \
         --findings evidence/redteam/findings.json --out evidence/redteam/
 
-The gate PASSES only if every exploit that succeeded pre-patch now FAILS. This
-is run by the verifier/CI, not the Blue Team agent, using the pinned exploit
-scripts (CODEOWNERS-protected). A fix that only hides a finding from a scanner
-still fails here. Exits non-zero if any exploit still succeeds (fail closed).
+The gate PASSES only if every exploit that succeeded pre-patch now FAILS, and
+no other probe in the playbook succeeds against the patched build either (a
+patch must not open a new hole). This is run by the verifier/CI, not the Blue
+Team agent, using the pinned exploit scripts (CODEOWNERS-protected). A fix that
+only hides a finding from a scanner still fails here. Exits non-zero if any
+exploit succeeds (fail closed).
 """
 from __future__ import annotations
 
@@ -21,15 +23,16 @@ from redteam.runner import PLAYBOOK
 
 
 def replay(staging_url: str, finding_ids: list[str]) -> dict:
+    """Replay the pre-patch findings first, then the rest of the playbook."""
     results = {}
-    for eid in finding_ids:
+    for eid in list(finding_ids) + [e for e in PLAYBOOK if e not in finding_ids]:
         probe = PLAYBOOK.get(eid)
         if probe is None:
             results[eid] = {"succeeded": True, "evidence": "unknown exploit id"}
             continue
         res = probe(staging_url, staging_url)
         results[eid] = {"succeeded": res.succeeded, "evidence": res.evidence,
-                        "vuln_id": res.vuln_id}
+                        "vuln_id": res.vuln_id, "found_pre_patch": eid in finding_ids}
     return results
 
 
@@ -44,15 +47,13 @@ def main(argv=None) -> int:
         print("ERROR: no staging URL; fail closed.", file=sys.stderr)
         return 2
     if not os.path.exists(args.findings):
-        print("No findings file; nothing was found pre-patch. Gate PASSES.")
-        return 0
+        # Fail closed: the Red Team must have run (even if it found nothing).
+        print("ERROR: no findings file; the Red Team did not run.", file=sys.stderr)
+        return 2
 
     with open(args.findings) as f:
         findings = json.load(f)
     finding_ids = [f["exploit_id"] for f in findings]
-    if not finding_ids:
-        print("No pre-patch findings. Security gate PASSES trivially.")
-        return 0
 
     results = replay(args.staging, finding_ids)
 
@@ -63,15 +64,19 @@ def main(argv=None) -> int:
         json.dump(results, f, indent=2)
 
     still = [eid for eid, r in results.items() if r["succeeded"]]
-    print(f"Replayed {len(finding_ids)} previously-successful exploit(s) on patched staging:")
+    print(f"Replayed {len(finding_ids)} pre-patch finding(s) + the rest of the playbook "
+          "on patched staging:")
     for eid, r in results.items():
         verdict = "STILL OPEN" if r["succeeded"] else "closed"
+        if r["succeeded"] and not r.get("found_pre_patch"):
+            verdict = "NEW HOLE"
         print(f"  [{verdict:10}] {r.get('vuln_id','?'):3} {eid}: {r['evidence']}")
 
     if still:
         print(f"\nSECURITY GATE FAIL: {len(still)} exploit(s) still succeed: {still}")
         return 1
-    print("\nSECURITY GATE PASS: every previously-successful exploit now fails.")
+    print("\nSECURITY GATE PASS: every previously-successful exploit now fails, "
+          "and no probe succeeds on the patch.")
     return 0
 
 

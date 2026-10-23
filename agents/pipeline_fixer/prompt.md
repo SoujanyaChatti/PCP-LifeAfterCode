@@ -1,36 +1,24 @@
 # Pipeline Fixer Agent
 
-**Version:** 1
-**Role:** When an MR pipeline fails, read the logs and push a fix so the pipeline goes green — honestly. You support the *Verify* stage.
+**Version:** 2
+**Role:** When an MR pipeline fails for a non-security reason, find the real cause and push an honest fix. You support the *Verify* stage.
 
 ## Trigger
-A failed pipeline on an open MR.
+An MR pipeline failed and the failing job is not `blueteam-verify` (the PCP Blue Team flow routes it to you).
 
 ## Attempt budget
-At most **3** fix commits per run. After that the gate fails and the Reporter opens a human follow-up issue.
+At most **3** fix commits per MR. Count your earlier `pipeline.green` claim notes on the MR first (`list_all_merge_request_notes`); at 3, post a note that the budget is exhausted and stop.
 
 ## What you do
-1. Fetch the failing job logs.
-2. Diagnose the real cause (failing test, lint, build error).
-3. Push a minimal fix commit to the MR branch.
-4. Re-run the pipeline. When it succeeds, emit `pipeline.green`.
-
-## Allowed tools
-- GitLab Jobs API: read logs.
-- Git: commit/push to the MR feature branch only.
-- `emit_claim` helper.
+1. Read the failure with `get_pipeline_failing_jobs`, `get_job_logs`, `get_pipeline_errors`.
+2. Diagnose the real cause (failing test, import error, build error) by reading the code.
+3. Commit a minimal fix to the MR's source branch with `create_commit`.
+4. Post a `pipeline.green` claim note with `create_merge_request_note` (same note format as the other agents: marker, then a JSON block with `claim_id`, `type`, `agent: "pipeline_fixer"`, `stage: "verify"`, `subject` with `project_id`, `mr_iid`, `commit_sha` of your fix, `statement`, `asserted: {"attempt": <n>}`, `created_at`).
 
 ## You CANNOT
-- Skip, delete, or `xfail` tests to make the pipeline pass.
-- Add `allow_failure: true` or otherwise weaken `.gitlab-ci.yml`. The verifier reads the MR diff of the CI file and FAILs `pipeline.green` if a weakening was added.
-- Touch `verifier/`, `redteam/`, `schemas/`, `flows/`.
-
-## Claim you emit (`pipeline.green`)
-```json
-{"type":"pipeline.green","agent":"pipeline_fixer","stage":"verify",
- "subject":{"project_id":0,"mr_iid":0,"commit_sha":"","pipeline_id":0},
- "statement":"Pipeline green after fix.","asserted":{"attempts":1}}
-```
+- Skip, delete, `xfail` or weaken tests.
+- Add `allow_failure: true` or otherwise edit `.gitlab-ci.yml`; the verifier reads the MR's CI diff and fails the gate if you do.
+- Touch `verifier/`, `redteam/`, `schemas/`, `duo/`.
 
 ## Hard rule
 A green pipeline achieved by hiding a failure is detected: the verifier re-checks the JUnit report and the CI diff. Fix the cause, not the symptom.

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import html
 import os
+from importlib import metadata
 
 from contextlib import asynccontextmanager
 
@@ -26,6 +27,15 @@ from app.summarize import summarize_text
 
 SECURE_MODE = os.environ.get("SECURE_MODE", "0") == "1"
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
+# Weaknesses the build ships WITHOUT their fix even in secure mode (demo of an
+# incomplete Blue Team patch). Baked into the image and its labels at build
+# time; see the Dockerfile.
+UNPATCHED = {v.strip().upper() for v in os.environ.get("PCP_UNPATCHED", "").split(",") if v.strip()}
+
+
+def hardened(vuln_id: str) -> bool:
+    """Is the fix for this weakness (V1..V7) in this build?"""
+    return SECURE_MODE and vuln_id not in UNPATCHED
 
 
 @asynccontextmanager
@@ -59,16 +69,15 @@ def require_admin(user=Depends(current_user)):
 # Health & meta
 # --------------------------------------------------------------------------
 def _dependency_report() -> dict:
-    """Report the version of the dependency that carries V6, so the security
-    gate can confirm whether the vulnerable pin is actually deployed.
-
-    In SECURE_MODE the build ships the bumped (patched) requirements, so it
-    advertises the patched version; the vulnerable build advertises 0.0.6.
-    The authoritative source in CI is the dependency-scanning report; this
-    runtime signal is what the reachability probe confirms."""
-    if SECURE_MODE:
-        return {"python-multipart": os.environ.get("MULTIPART_VERSION", "0.0.18")}
-    return {"python-multipart": os.environ.get("MULTIPART_VERSION", "0.0.6")}
+    """Report the INSTALLED version of the dependency that carries V6, read
+    from package metadata. The image decides it: the pre-patch twin installs
+    the vulnerable pin (requirements-vuln.txt), the shipped build does not.
+    Nothing at runtime can make this report a version that isn't installed."""
+    try:
+        version = metadata.version("python-multipart")
+    except metadata.PackageNotFoundError:
+        version = "not-installed"
+    return {"python-multipart": version}
 
 
 @app.get("/healthz")
@@ -77,13 +86,14 @@ def healthz() -> dict:
         "status": "ok",
         "version": APP_VERSION,
         "secure_mode": SECURE_MODE,
+        "unpatched": sorted(UNPATCHED),
         "deps": _dependency_report(),
     }
 
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    mode = "secure" if SECURE_MODE else "vulnerable"
+    mode = "secure" if SECURE_MODE else "pre-patch twin"
     return (
         "<!doctype html><html><head><title>Team Notes</title></head>"
         f"<body><h1>Team Notes</h1><p>build: {html.escape(APP_VERSION)} "
@@ -101,7 +111,7 @@ def index() -> str:
 @app.get("/search", response_class=HTMLResponse)
 def search(q: str = Query(default="")) -> str:
     with db.cursor() as cur:
-        if SECURE_MODE:
+        if hardened("V1"):
             # V1 fix: parameterized query.
             cur.execute(
                 "SELECT id, title, body, tags FROM notes "
@@ -114,11 +124,11 @@ def search(q: str = Query(default="")) -> str:
                 "SELECT id, title, body, tags FROM notes "
                 f"WHERE title LIKE '%{q}%' OR body LIKE '%{q}%'"
             )
-            cur.executescript(sql) if False else cur.execute(sql)
+            cur.execute(sql)
         rows = cur.fetchall()
 
     # V2: the search term is echoed back into the page.
-    echo = html.escape(q) if SECURE_MODE else q  # V2 fix: escape output.
+    echo = html.escape(q) if hardened("V2") else q  # V2 fix: escape output.
     items = "".join(
         f"<li>#{r['id']} <b>{html.escape(r['title'])}</b>: "
         f"{html.escape(r['body'])} "
@@ -145,7 +155,7 @@ def get_note(note_id: int, user=Depends(current_user)) -> JSONResponse:
     if row is None:
         raise HTTPException(status_code=404, detail="not found")
 
-    if SECURE_MODE:
+    if hardened("V3"):
         # V3 fix: a caller may only read their own notes.
         if user is None:
             raise HTTPException(status_code=401, detail="authentication required")
@@ -158,7 +168,7 @@ def get_note(note_id: int, user=Depends(current_user)) -> JSONResponse:
 # --------------------------------------------------------------------------
 # V4: admin route with no auth
 # --------------------------------------------------------------------------
-if SECURE_MODE:
+if hardened("V4"):
 
     @app.get("/admin/users")
     def admin_users(_admin=Depends(require_admin)) -> JSONResponse:
@@ -193,7 +203,7 @@ def boom() -> dict:
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    if SECURE_MODE:
+    if hardened("V5"):
         # V5 fix: generic error, no internals leaked.
         return JSONResponse(status_code=500, content={"detail": "internal server error"})
     # V5 (vuln): leak the exception text (and anything in it) to the client.
@@ -207,5 +217,5 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 async def summarize(request: Request) -> JSONResponse:
     payload = await request.json()
     text = str(payload.get("text", ""))
-    result = summarize_text(text, secure=SECURE_MODE)
+    result = summarize_text(text, secure=hardened("V7"))
     return JSONResponse({"summary": result})

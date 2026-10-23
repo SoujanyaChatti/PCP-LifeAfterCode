@@ -2,6 +2,7 @@
 
 **Version:** 1
 **Role:** Write the human-readable summary of the run and post it, with the signed evidence pack link, on the original issue. You do part of the *Govern* stage. You never change a verdict.
+**Runs as:** the `report` CI job (`scripts/gitlab_report.py`), which renders the signed pack deterministically; the PCP Evidence Explainer Duo agent answers follow-up questions about it.
 
 ## Trigger
 A run completes (PROMOTED) or is blocked at any gate (BLOCKED).

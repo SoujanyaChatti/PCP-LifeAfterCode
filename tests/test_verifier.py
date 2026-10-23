@@ -98,3 +98,62 @@ def test_fail_closed_blocks_promotion():
     """Any non-PASS gate must return a non-zero-worthy verdict."""
     verdict, _ = _run("tests.pass", "tests_lie", {"tests_failed": 0})
     assert verdict != "PASS"
+
+
+# --------------------------------------------------------------------------
+# Fail-closed regressions: each of these used to PASS.
+# --------------------------------------------------------------------------
+def test_empty_claimed_sha_never_matches():
+    """An empty claimed SHA is a prefix of every SHA; it must not match."""
+    src = FixtureSource(os.path.join(FIX, "code_ready"))
+    verdict, records = run_gate(_claim("code.ready", {}, {"commit_sha": ""}), src, CAT)
+    sha = next(r for r in records if r["check_id"] == "code.head_sha_matches")
+    assert sha["verdict"] == "FAIL"
+    assert verdict != "PASS"
+
+
+def test_image_sha_label_mismatch_with_empty_claim():
+    src = FixtureSource(os.path.join(FIX, "image_built"))
+    verdict, _ = run_gate(_claim("image.built", {}, {"commit_sha": ""}), src, CAT)
+    assert verdict != "PASS"
+
+
+def test_inflated_pass_count_is_a_caught_lie():
+    """0 failures is true, but the agent claims 500 passing tests vs 142."""
+    verdict, records = _run("tests.pass", "tests_pass",
+                            {"tests_passed": 500, "tests_failed": 0, "coverage_pct": 87.0})
+    junit = next(r for r in records if r["check_id"] == "tests.junit_zero_failures")
+    assert verdict == "FAIL"
+    assert "claim_mismatch" in junit["tags"]
+
+
+def test_report_for_other_commit_rejected(tmp_path):
+    import json
+
+    (tmp_path / "test_report.json").write_text(json.dumps(
+        {"total_count": 142, "failed_count": 0, "commit_sha": "fffffff0000000"}))
+    (tmp_path / "coverage.json").write_text(json.dumps({"coverage_pct": 87.0}))
+    verdict, records = run_gate(
+        _claim("tests.pass", {"tests_passed": 142, "tests_failed": 0, "coverage_pct": 87.0}),
+        FixtureSource(str(tmp_path)), CAT)
+    assert verdict == "FAIL"
+    assert "claim_mismatch" in records[0]["tags"]
+
+
+def test_regression_test_that_passes_on_vulnerable_build_is_rejected():
+    """A regression test that also passes pre-patch proves nothing."""
+    verdict, records = _run(
+        "vuln.fixed", "vuln_weak_test",
+        {"exploit_id": "v1_sql_injection",
+         "regression_test": "tests/test_regressions.py::test_v1_sqli_fixed"})
+    disc = next(r for r in records if r["check_id"] == "vuln.regression_test_discriminates")
+    assert verdict == "FAIL"
+    assert disc["verdict"] == "FAIL"
+    assert "claim_mismatch" in disc["tags"]
+
+
+def test_deploy_digest_mismatch_is_caught():
+    verdict, records = run_gate(
+        _claim("deploy.healthy", {}, {"image_digest": "sha256:other"}),
+        FixtureSource(os.path.join(FIX, "deploy_healthy")), CAT)
+    assert verdict == "FAIL"

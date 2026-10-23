@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -49,10 +50,36 @@ def emit_claim(
 
 
 def claim_note_body(claim: dict) -> str:
-    """Render the MR note body for a claim, with the marker the pipeline greps."""
+    """Render the MR note body for a claim, with the marker the pipeline greps.
+    The full claim is embedded so the pipeline can read it back verbatim."""
     return (
         f"{CLAIM_MARKER}\n"
         f"**Claim `{claim['type']}`** by `{claim['agent']}`\n\n"
         f"> {claim['statement']}\n\n"
-        f"```json\n{json.dumps(claim['asserted'], indent=2)}\n```\n"
+        f"```json\n{json.dumps(claim, indent=2)}\n```\n"
     )
+
+
+_JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+
+
+def parse_claim_notes(notes: list[dict]) -> list[dict]:
+    """Extract claims from MR notes carrying the marker, oldest first. Notes
+    without the marker, or whose JSON is not a full claim, are ignored."""
+    claims = []
+    for note in sorted(notes, key=lambda n: n.get("created_at", "")):
+        body = note.get("body", "")
+        if CLAIM_MARKER not in body:
+            continue
+        m = _JSON_BLOCK.search(body)
+        if not m:
+            continue
+        try:
+            claim = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(claim, dict) and {"type", "agent", "claim_id"} <= claim.keys():
+            claim.setdefault("_source", {"mr_note_id": note.get("id"),
+                                         "author": note.get("author", {}).get("username")})
+            claims.append(claim)
+    return claims

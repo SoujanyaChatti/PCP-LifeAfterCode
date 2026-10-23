@@ -1,17 +1,43 @@
 # Proof-Carrying Pipeline — the gated spine.
 #
-# Pattern per gated stage: a WORK job produces a claim + evidence; a verify:<x>
-# job consumes the claim plus AUTHORITATIVE evidence and exits non-zero on FAIL,
-# which blocks the next stage. Verifier jobs use VERIFIER_READONLY_TOKEN, which
-# is distinct from the agent token — no job can both build and verify.
+# Pattern per gated stage: a WORK job produces an artifact and a claim; a
+# verify:<x> job reads the claim plus AUTHORITATIVE evidence (GitLab API,
+# container registry, live service, pinned exploit replay) and exits non-zero
+# on FAIL, which blocks everything downstream. Work jobs never decide: e.g. the
+# test job always succeeds and verify:tests is what fails on a red report.
 #
-# This CI file IS the guaranteed implementation of the flow in flows/. It is
-# under CODEOWNERS; a build agent cannot weaken it (and verify:tests fails the
-# gate if an allow_failure:true is added in an MR).
+# Verifier jobs read GitLab with VERIFIER_READONLY_TOKEN and Google Cloud as
+# GCP_VERIFIER_SA (read-only); deploy jobs use GCP_DEPLOY_SA. No job can both
+# build and verify. This file is under CODEOWNERS.
+#
+# Works in two modes:
+#   - without Google Cloud: the security gate attacks the images as CI service
+#     containers (hermetic). No deploy.
+#   - with GCP_PROJECT set: ephemeral Cloud Run staging per MR, production on
+#     main, live deploy verification, scheduled drift watch.
+#
+# Demo knobs (Run pipeline > variables):
+#   PCP_DEMO=lie          the Builder's tests.pass claim lies about a real failure
+#   PCP_UNPATCHED=V1      the Blue Team's patch misses V1; replay must catch it
+#   PCP_HUMAN_APPROVED=1  a human approves promotion for agents on probation
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { PCP_KIND: "mr", STAGING_ID: "mr-$CI_MERGE_REQUEST_IID" }
+    - if: $CI_COMMIT_TAG
+      variables: { PCP_KIND: "tag" }
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      variables: { PCP_KIND: "watch" }
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables: { PCP_KIND: "main", STAGING_ID: "main" }
+    - if: $CI_COMMIT_BRANCH
+      variables: { PCP_KIND: "branch", STAGING_ID: "$CI_COMMIT_REF_SLUG" }
 
 stages:
   - plan
-  - build
   - test
   - verify-tests
   - scan
@@ -24,39 +50,114 @@ stages:
   - verify-deploy
   - evidence
   - verify-evidence
+  - report
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip"
-  IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+  GCP_REGION: "us-central1"
+  COSIGN_VERSION: "v2.4.1"
+  CRANE_VERSION: "v0.20.2"
+  # Tags pushed by `package`; services and Cloud Run use the digests.
+  IMAGE_REF: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+  TWIN_REF: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA-prepatch"
 
-default:
+# --------------------------------------------------------------------------
+# Templates
+# --------------------------------------------------------------------------
+.py:
   image: python:3.12-slim
   cache:
+    key: pip-$CI_COMMIT_REF_SLUG
     paths: [.pip/]
   before_script:
     - pip install --quiet -r requirements-dev.txt
 
-# ---------------------------------------------------------------------------
-# PLAN — Planner agent writes acceptance criteria + risk label (or CI fallback)
-# ---------------------------------------------------------------------------
-plan:
-  stage: plan
-  script:
-    - echo "Planner agent runs via Duo flow; see flows/pipeline.flow.yaml."
-    - echo "CI fallback would invoke agents/planner/prompt.md via the API."
+.pipeline:
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" || $CI_COMMIT_BRANCH'
+    - if: $PCP_KIND == "mr" || $PCP_KIND == "main" || $PCP_KIND == "branch"
 
-# ---------------------------------------------------------------------------
-# TEST — pytest, JUnit + coverage (authoritative evidence for verify:tests)
-# ---------------------------------------------------------------------------
+.gcp:
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://gitlab.com
+  rules:
+    - if: $GCP_PROJECT && ($PCP_KIND == "mr" || $PCP_KIND == "main" || $PCP_KIND == "branch")
+
+.gcloud:
+  extends: .gcp
+  image: google/cloud-sdk:slim
+  before_script:
+    - export CLOUDSDK_AUTH_ACCESS_TOKEN=$(python3 -m verifier.gcp token --sa "$GCP_DEPLOY_SA")
+    - gcloud config set project "$GCP_PROJECT"
+
+# The pre-patch twin and the hardened build, as service containers. Used by the
+# security gate in both modes (in Cloud Run mode the staging URLs win).
+.app-services:
+  services:
+    - name: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA-prepatch
+      alias: pcp-pre
+    - name: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+      alias: pcp-post
+
+# --------------------------------------------------------------------------
+# PLAN — the Planner agent's plan.ready claim, checked against the issue itself
+# --------------------------------------------------------------------------
+verify:plan:
+  extends: [.py]
+  stage: plan
+  rules:
+    - if: $PCP_KIND == "mr" || $PCP_KIND == "main"
+  script:
+    - python scripts/collect_claims.py plan.ready
+    - python -m verifier.run --claim claims/plan.ready.json --out evidence
+  artifacts:
+    when: always
+    paths: [claims/plan.ready.json, evidence/]
+
+# Did this change touch the grader itself? Recorded in the pack; GitLab's
+# CODEOWNERS + protected branch is what enforces human approval.
+verify:trust-core:
+  extends: [.py]
+  stage: plan
+  rules:
+    - if: $PCP_KIND == "mr"
+  variables:
+    GIT_DEPTH: "0"   # the MR's diff base must be in history
+  before_script: []
+  script:
+    - python -m verifier.fingerprint --against "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+        --out trust_core.json || true
+    - mkdir -p evidence && mv trust_core.json evidence/
+  artifacts:
+    paths: [evidence/trust_core.json]
+
+# --------------------------------------------------------------------------
+# CREATE — the Builder's code.ready claim, checked against the MR
+# --------------------------------------------------------------------------
+verify:create:
+  extends: [.py]
+  stage: plan
+  rules:
+    - if: $PCP_KIND == "mr"
+  script:
+    - python scripts/collect_claims.py code.ready
+    - python -m verifier.run --claim claims/code.ready.json --out evidence
+  artifacts:
+    when: always
+    paths: [claims/code.ready.json, evidence/]
+
+# --------------------------------------------------------------------------
+# TEST — produce the authoritative report. This job does NOT judge it.
+# --------------------------------------------------------------------------
 test:
+  extends: [.py, .pipeline]
   stage: test
   script:
-    - pip install --quiet -r requirements-dev.txt
-    - python -m pytest --junitxml=report.xml --cov=app --cov=verifier --cov=redteam
-        --cov-report=term --cov-report=xml
-  coverage: '/TOTAL.*\s(\d+\.\d+)%/'
+    - EXTRA=""; if [ "$PCP_DEMO" = "lie" ]; then EXTRA="scripts/_demo_failing_test.py"; fi
+    - python -m pytest tests $EXTRA --junitxml=report.xml
+        --cov=app --cov=verifier --cov=redteam --cov=evidence_pack
+        --cov-report=term --cov-report=xml || echo "tests failed; verify:tests decides"
+  coverage: '/TOTAL.*\s(\d+(?:\.\d+)?)%/'
   artifacts:
     when: always
     paths: [report.xml, coverage.xml]
@@ -66,162 +167,356 @@ test:
         coverage_format: cobertura
         path: coverage.xml
 
-# Builder agent emits the tests.pass claim as an artifact (claims/tests.pass.json).
-# For CI-only runs we synthesize it from the real report so the gate has input.
-make-claim:tests:
+# The Builder's tests.pass claim: read from its MR note, else synthesized.
+claim:tests:
+  extends: [.py, .pipeline]
   stage: test
   needs: [test]
   script:
-    - python scripts/claim_from_report.py --report report.xml --out claims/tests.pass.json
+    - python scripts/collect_claims.py tests.pass --report report.xml --coverage coverage.xml
   artifacts:
     paths: [claims/tests.pass.json]
 
 verify:tests:
+  extends: [.py, .pipeline]
   stage: verify-tests
-  needs: [test, make-claim:tests]
-  variables:
-    VERIFIER_READONLY_TOKEN: "$VERIFIER_READONLY_TOKEN"
+  needs: [test, "claim:tests"]
   script:
-    - python scripts/report_to_fixture.py --report report.xml --coverage coverage.xml --out /tmp/fx
-    - python -m verifier.run --claim claims/tests.pass.json --out evidence --fixtures /tmp/fx
+    - python scripts/report_to_fixture.py --report report.xml --coverage coverage.xml --out fx
+    - python -m verifier.run --claim claims/tests.pass.json --out evidence --fixtures fx
+        --live "$([ -n "$VERIFIER_READONLY_TOKEN" ] && echo gitlab)"
   artifacts:
     when: always
-    paths: [evidence/]
+    paths: [evidence/, fx/]
 
-# ---------------------------------------------------------------------------
+# Plant known lies (one is about THIS run's report); the verifier must catch all.
+verify:canary:
+  extends: [.py, .pipeline]
+  stage: verify-tests
+  needs: [test]
+  script:
+    - python scripts/report_to_fixture.py --report report.xml --coverage coverage.xml --out fx
+    - python -m verifier.canary --fixtures fx --out evidence/canary.json
+  artifacts:
+    when: always
+    paths: [evidence/canary.json]
+
+# --------------------------------------------------------------------------
 # SCAN — GitLab SAST / dependency scanning / secret detection
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 include:
   - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/Dependency-Scanning.gitlab-ci.yml
   - template: Jobs/Secret-Detection.gitlab-ci.yml
+  # Publish the Duo flows + agents to the AI Catalog (see the file).
+  - local: ci/duo-catalog.yml
+    rules:
+      - if: $CATALOG_SYNC_TOKEN
 
-# ---------------------------------------------------------------------------
-# PACKAGE — build + push image, record digest, label with commit SHA
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# PACKAGE — hardened image + pre-patch twin, both labelled with the commit.
+# Copied to Artifact Registry by digest (crane preserves it) for Cloud Run.
+# --------------------------------------------------------------------------
 package:
+  extends: [.pipeline]
   stage: package
-  needs: [verify:tests]
+  needs: [verify:tests, verify:canary]
   image: docker:27
   services: [docker:27-dind]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://gitlab.com
   before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - apk add --no-cache python3 curl >/dev/null
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:
-    - docker build --build-arg COMMIT_SHA=$CI_COMMIT_SHA -t "$IMAGE" .
-    - docker push "$IMAGE"
-    - DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")
-    - mkdir -p claims && echo "{\"digest\":\"$DIGEST\",\"sha\":\"$CI_COMMIT_SHA\"}" > claims/image.json
+    - docker build --build-arg COMMIT_SHA=$CI_COMMIT_SHA --build-arg SECURE_MODE=1
+        --build-arg PCP_UNPATCHED="$PCP_UNPATCHED" -t "$IMAGE_REF" .
+    - docker build --build-arg COMMIT_SHA=$CI_COMMIT_SHA --build-arg SECURE_MODE=0 -t "$TWIN_REF" .
+    - docker push "$IMAGE_REF" && docker push "$TWIN_REF"
+    - DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_REF" | cut -d@ -f2)
+    - TWIN_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$TWIN_REF" | cut -d@ -f2)
+    - AR_REF=""; AR_TWIN=""
+    - |
+      if [ -n "$GCP_PROJECT" ]; then
+        curl -sSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar -xz -C /usr/local/bin crane
+        crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
+        python3 -m verifier.gcp token --sa "$GCP_DEPLOY_SA" | crane auth login "${GCP_REGION}-docker.pkg.dev" -u oauth2accesstoken --password-stdin
+        AR="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/pcp/app"
+        crane copy "$CI_REGISTRY_IMAGE@$DIGEST" "$AR:$CI_COMMIT_SHA"
+        crane copy "$CI_REGISTRY_IMAGE@$TWIN_DIGEST" "$AR:$CI_COMMIT_SHA-prepatch"
+        AR_REF="$AR@$DIGEST"; AR_TWIN="$AR@$TWIN_DIGEST"
+      fi
+    - mkdir -p build
+    - printf '{"sha":"%s","digest":"%s","twin_digest":"%s","gitlab_ref":"%s","ar_ref":"%s","ar_twin_ref":"%s"}\n'
+        "$CI_COMMIT_SHA" "$DIGEST" "$TWIN_DIGEST" "$CI_REGISTRY_IMAGE@$DIGEST" "$AR_REF" "$AR_TWIN" > build/images.json
+    - cat build/images.json
   artifacts:
-    paths: [claims/image.json]
+    paths: [build/images.json]
 
+# image.built is checked against the REGISTRY (manifest + labels), not against
+# what the package job wrote.
 verify:package:
+  extends: [.py, .pipeline]
   stage: verify-package
   needs: [package]
   script:
-    - python scripts/verify_image.py --image-claim claims/image.json --out evidence
+    - python scripts/collect_claims.py image.built --images build/images.json
+    - python -m verifier.run --claim claims/image.built.json --out evidence --live registry
   artifacts:
     when: always
-    paths: [evidence/]
+    paths: [claims/image.built.json, evidence/]
 
-# ---------------------------------------------------------------------------
-# DEPLOY STAGING — ephemeral Cloud Run service per MR (see infra/)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# DEPLOY STAGING — Cloud Run mode only: the twin and the hardened build
+# --------------------------------------------------------------------------
 deploy-staging:
+  extends: [.gcloud]
   stage: deploy-staging
-  needs: [verify:package]
-  image: google/cloud-sdk:slim
+  needs: [package, verify:package]
   script:
     - bash infra/deploy_staging.sh
   environment:
-    name: staging/$CI_MERGE_REQUEST_IID
+    name: staging/$STAGING_ID
+    url: $STAGING_URL
     on_stop: stop-staging
+    auto_stop_in: 2 hours
   artifacts:
     reports:
-      dotenv: staging.env   # exports STAGING_URL for later jobs
+      dotenv: staging.env   # STAGING_URL_PRE, STAGING_URL
 
 stop-staging:
+  extends: [.gcloud]
   stage: deploy-staging
   needs: [deploy-staging]
-  image: google/cloud-sdk:slim
   when: manual
   script:
     - bash infra/teardown_staging.sh
   environment:
-    name: staging/$CI_MERGE_REQUEST_IID
+    name: staging/$STAGING_ID
     action: stop
+  rules:
+    - if: $GCP_PROJECT && ($PCP_KIND == "mr" || $PCP_KIND == "main" || $PCP_KIND == "branch")
+      when: manual
+      allow_failure: true
 
-# ---------------------------------------------------------------------------
-# REDTEAM — authorized white-hat playbook against our OWN staging
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# REDTEAM — authorized white-hat playbook against OUR pre-patch twin only
+# --------------------------------------------------------------------------
 redteam:
+  extends: [.py, .pipeline, .app-services]
   stage: redteam
-  needs: [deploy-staging]
+  needs:
+    - job: verify:package
+    - job: deploy-staging
+      optional: true
   script:
-    - python -m redteam.attack --staging "$STAGING_URL" --out evidence/redteam
+    - export STAGING_URL_PRE="${STAGING_URL_PRE:-http://pcp-pre:8080}"
+    - python -m redteam.attack --staging "$STAGING_URL_PRE" --out evidence/redteam
   artifacts:
     when: always
     paths: [evidence/redteam/]
 
-# ---------------------------------------------------------------------------
-# BLUETEAM-VERIFY — verifier replays the previously-successful exploits on the
-# patched staging. Blocks deploy-prod. (Blue Team patch commits happen via the
-# flow between redeploy and this job.)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# BLUETEAM-VERIFY — the verifier (not the Blue Team) replays every exploit on
+# the hardened build, proves each regression test fails-before/passes-after,
+# and judges the Blue Team's vuln.fixed claims. Blocks deploy-prod.
+# --------------------------------------------------------------------------
 blueteam-verify:
+  extends: [.py, .pipeline, .app-services]
   stage: blueteam-verify
-  needs: [redteam]
+  needs:
+    - job: redteam
+    - job: deploy-staging
+      optional: true
   script:
+    - export STAGING_URL_PRE="${STAGING_URL_PRE:-http://pcp-pre:8080}"
+    - export STAGING_URL="${STAGING_URL:-http://pcp-post:8080}"
     - python -m redteam.replay_gate --staging "$STAGING_URL"
-        --findings evidence/redteam/findings.json --out evidence/redteam
+        --findings evidence/redteam/findings.json --out evidence/redteam || true
+    - python -m redteam.prove_regressions --pre-url "$STAGING_URL_PRE"
+        --post-url "$STAGING_URL" --out evidence/redteam || true
+    - python scripts/collect_claims.py vuln.fixed --findings evidence/redteam/findings.json
+    - python -m verifier.run $(for c in claims/vuln.fixed*.json; do printf -- '--claim %s ' "$c"; done)
+        --out evidence --fixtures evidence/redteam
   artifacts:
     when: always
-    paths: [evidence/redteam/]
+    paths: [claims/, evidence/]
 
-# ---------------------------------------------------------------------------
-# DEPLOY PROD — only on main, only after all gates. Promotes the exact digest.
-# ---------------------------------------------------------------------------
-deploy-prod:
+# --------------------------------------------------------------------------
+# DEPLOY PROD — main only, only after every gate, and only if every agent in
+# this run has EARNED unattended promotion (trust ledger).
+# --------------------------------------------------------------------------
+policy:autonomy:
+  extends: [.py]
   stage: deploy-prod
   needs: [blueteam-verify]
-  image: google/cloud-sdk:slim
+  rules:
+    - if: $PCP_KIND == "main"
+  script:
+    - python -m verifier.ledger pull --ledger ledger.json
+    - python -m verifier.ledger policy --ledger ledger.json --agents builder,blueteam,release
+
+deploy-prod:
+  extends: [.gcloud]
+  stage: deploy-prod
+  needs: [blueteam-verify, "policy:autonomy", package]
+  rules:
+    - if: $GCP_PROJECT && $PCP_KIND == "main"
   script:
     - bash infra/deploy_prod.sh
   environment:
     name: production
     url: $PROD_URL
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+  artifacts:
+    paths: [claims/deploy.healthy.json]
+    reports:
+      dotenv: prod.env   # PROD_URL, PREV_REVISION
 
 verify:deploy:
+  extends: [.py, .gcp]
   stage: verify-deploy
   needs: [deploy-prod]
-  script:
-    - python -m verifier.run --claim claims/deploy.healthy.json --out evidence
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: $GCP_PROJECT && $PCP_KIND == "main"
+  script:
+    # Real traffic, then wait for Cloud Monitoring to report it.
+    - for i in $(seq 1 30); do python -c "import httpx,sys;httpx.get(sys.argv[1]+'/healthz',timeout=10)" "$PROD_URL" || true; done
+    - sleep 180
+    - python -m verifier.run --claim claims/deploy.healthy.json --out evidence --live cloudrun
   artifacts:
     when: always
     paths: [evidence/]
 
-# ---------------------------------------------------------------------------
-# EVIDENCE — assemble + sign the pack, post the issue comment
-# ---------------------------------------------------------------------------
-evidence:
-  stage: evidence
-  needs: [verify:tests, verify:package]
-  when: always
+rollback:
+  extends: [.gcloud]
+  stage: verify-deploy
+  needs: [deploy-prod, verify:deploy]
+  rules:
+    - if: $GCP_PROJECT && $PCP_KIND == "main"
+      when: on_failure
   script:
-    - echo "{\"issue_iid\":\"$ISSUE_IID\",\"mr_iid\":\"$CI_MERGE_REQUEST_IID\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"image_digest\":\"$(cat claims/image.json 2>/dev/null)\",\"pipeline_id\":\"$CI_PIPELINE_ID\"}" > run_meta.json
-    - python -m evidence_pack.assemble --claims claims --evidence evidence --redteam evidence/redteam --meta run_meta.json --out evidence-pack.json || true
+    - test -n "$PREV_REVISION" || { echo "no previous revision to roll back to"; exit 1; }
+    - gcloud run services update-traffic pcp-prod --region "$GCP_REGION"
+        --to-revisions "$PREV_REVISION=100" --quiet
+    - echo "Rolled back pcp-prod to $PREV_REVISION"
+
+# --------------------------------------------------------------------------
+# EVIDENCE — assemble + sign (keyless) the pack; verify it in a separate job
+# --------------------------------------------------------------------------
+.cosign:
+  script:
+    - curl -sSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+    - chmod +x /usr/local/bin/cosign
+
+evidence:
+  extends: [.py, .pipeline]
+  stage: evidence
+  when: always
+  needs:
+    - { job: verify:plan, optional: true }
+    - { job: verify:trust-core, optional: true }
+    - { job: verify:create, optional: true }
+    - { job: verify:tests, optional: true }
+    - { job: verify:canary, optional: true }
+    - { job: "claim:tests", optional: true }
+    - { job: package, optional: true }
+    - { job: verify:package, optional: true }
+    - { job: redteam, optional: true }
+    - { job: blueteam-verify, optional: true }
+    - { job: deploy-prod, optional: true }
+    - { job: verify:deploy, optional: true }
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - apt-get update -qq && apt-get install -y -qq curl >/dev/null
+    - !reference [.cosign, script]
+    - python scripts/run_meta.py > run_meta.json
+    - REQUIRE="tests.pass,verifier.canary,image.built,vuln.fixed"
+    - if [ "$PCP_KIND" = "mr" ]; then REQUIRE="plan.ready,code.ready,$REQUIRE"; fi
+    - if [ "$PCP_KIND" = "main" ]; then REQUIRE="plan.ready,$REQUIRE"; fi
+    - if [ "$PCP_KIND" = "main" ] && [ -n "$GCP_PROJECT" ]; then REQUIRE="$REQUIRE,deploy.healthy"; fi
+    - python -m evidence_pack.assemble --claims claims --evidence evidence
+        --redteam evidence/redteam --meta run_meta.json --require "$REQUIRE"
+        --out evidence-pack.json || echo "decision is BLOCKED; still signing the record"
     - bash scripts/sign_pack.sh evidence-pack.json.canonical
-    - python -m evidence_pack.report --pack evidence-pack.json --pack-url "$CI_JOB_URL" --out issue-comment.md
   artifacts:
     when: always
-    paths: [evidence-pack.json, evidence-pack.json.canonical, evidence-pack.json.sig, issue-comment.md]
+    paths: [evidence-pack.json, evidence-pack.json.canonical, evidence-pack.json.bundle,
+            evidence-pack.json.bundle.rekor]
 
 verify-evidence:
+  extends: [.py, .pipeline]
   stage: verify-evidence
   needs: [evidence]
   when: always
   script:
+    - apt-get update -qq && apt-get install -y -qq curl >/dev/null
+    - !reference [.cosign, script]
     - bash scripts/verify_pack.sh evidence-pack.json
+    # The pack is authentic; now the decision it records gates the pipeline.
+    - python -c "import json,sys;d=json.load(open('evidence-pack.json'))['decision'];print('decision:',d);sys.exit(d!='PROMOTED')"
+
+# --------------------------------------------------------------------------
+# REPORT — ledger, issue comment + follow-up, public dashboard
+# --------------------------------------------------------------------------
+ledger:
+  extends: [.py, .pipeline]
+  stage: report
+  needs: [evidence]
+  when: always
+  resource_group: pcp-ledger   # one writer at a time keeps the chain linear
+  script:
+    - python -m verifier.ledger pull --ledger ledger.json
+    - python -m verifier.ledger verify --ledger ledger.json
+    - python -m verifier.ledger append --ledger ledger.json --pack evidence-pack.json
+    - python -m verifier.ledger summary --ledger ledger.json --out trust.json
+    - python -m verifier.ledger push --ledger ledger.json
+  artifacts:
+    when: always
+    paths: [ledger.json, trust.json]
+
+report:
+  extends: [.py, .pipeline]
+  stage: report
+  needs: [evidence, ledger]
+  when: always
+  script:
+    - python scripts/gitlab_report.py --pack evidence-pack.json --trust trust.json
+  artifacts:
+    when: always
+    paths: [issue-comment.md]
+
+pages:
+  extends: [.py]
+  stage: report
+  needs: [evidence, ledger]
+  when: always
+  rules:
+    - if: $PCP_KIND == "main"
+  script:
+    - python -m dashboard.build --ledger ledger.json --pack evidence-pack.json --out public
+  artifacts:
+    paths: [public]
+
+# --------------------------------------------------------------------------
+# WATCH — scheduled: proofs expire. Re-verify that production still serves the
+# last proven digest and is healthy; open an incident on drift.
+# --------------------------------------------------------------------------
+watch:prod:
+  extends: [.py]
+  stage: verify-deploy
+  id_tokens:
+    GCP_ID_TOKEN:
+      aud: https://gitlab.com
+  rules:
+    - if: $PCP_KIND == "watch" && $GCP_PROJECT
+  script:
+    - python -m verifier.ledger pull --ledger ledger.json
+    - python scripts/watch_prod.py --ledger ledger.json
+  artifacts:
+    when: always
+    paths: [evidence/]

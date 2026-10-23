@@ -34,6 +34,14 @@ def run_check(claim: dict, fixtures: str | None = None) -> dict:
     return {"verdict": verdict, "records": records}
 
 
+def verifier_self_test() -> dict:
+    """Plant one known lie per claim type and report whether the verifier
+    caught every one (the same canary every pipeline runs)."""
+    from verifier.canary import run_canaries
+
+    return run_canaries()
+
+
 def _serve() -> None:  # pragma: no cover - only runs with mcp installed
     try:
         from mcp.server.fastmcp import FastMCP
@@ -43,6 +51,7 @@ def _serve() -> None:  # pragma: no cover - only runs with mcp installed
         )
     server = FastMCP("pcp-verifier")
     server.tool()(run_check)
+    server.tool()(verifier_self_test)
     server.run()
 
 

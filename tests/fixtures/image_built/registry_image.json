@@ -1,1 +1,1 @@
-{"digest":"sha256:deadbeef","labels":{"commit_sha":"abc123def456"}}
+{"digest":"sha256:deadbeef","labels":{"commit_sha":"abc123def456","secure_mode":"1"}}

@@ -20,10 +20,22 @@ report.xml
 # CI / evidence artifacts (regenerated each run)
 claims/
 evidence/
-evidence-pack.json
-evidence-pack.json.sig
-evidence-pack.pem
+build/
+fx/
+public/
+rehearsal/
+evidence-pack.json*
+issue-comment.md
+ledger.json
+trust.json
+staging.env
+prod.env
+run_meta.json
 *.cert
+
+# Terraform local state
+infra/.terraform/
+infra/*.tfstate*
 
 # Editor / OS
 .DS_Store

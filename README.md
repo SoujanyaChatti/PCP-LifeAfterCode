@@ -2,11 +2,12 @@
 
 **Autonomous delivery that can't lie: every promotion carries its own proof.**
 
-AI agents take a GitLab issue all the way to production — but **no agent is ever
-trusted on its word**. Every claim an agent makes at a stage gate ("tests pass",
-"vulnerability fixed", "deployed and healthy") must be backed by
-machine-checkable evidence from a source the agent cannot write to, before the
-pipeline promotes. Unproven claims block promotion and open a follow-up issue.
+AI agents take a GitLab issue all the way to production, but **no agent is ever
+trusted on its word**. Every claim an agent makes ("tests pass", "vulnerability
+fixed", "deployed and healthy") is checked by deterministic code against
+evidence the agent cannot write to, before anything is promoted. A claim the
+evidence contradicts is blocked and recorded as a **caught lie**, and the agent
+that made it loses unattended access to production until it earns it back.
 
 > Built for the [Life After Code](https://gitlab-transcend.devpost.com/) hackathon — Path A (Start Fresh), Hands-off autonomy.
 
@@ -17,84 +18,110 @@ pipeline promotes. Unproven claims block promotion and open a follow-up issue.
 Hands-off agents are the goal of agentic DevSecOps, but teams won't give agents
 production access because agent summaries are unverifiable. An agent can write
 "all tests pass, security issue resolved" whether or not it's true, and humans
-rarely check. This project removes that trust blocker: the gates check evidence,
+rarely check. This project removes that trust blocker: gates check evidence,
 never agent text.
 
-## The trust model (read this first)
+## What makes it different
 
-1. **Claims are data, not truth.** Every agent ends its step by emitting a
-   structured JSON claim ([`schemas/claim.schema.json`](schemas/claim.schema.json)). Free-text summaries are never used for gating.
-2. **Evidence comes from authoritative sources only** — the GitLab API, the
-   container registry, the live service, and the pinned exploit replay. Never
-   from a file an agent wrote in the same job.
-3. **Separation of duties.** Agents that build cannot verify. The verifier runs
-   in its own CI job with its own read-only token. No token can both build and
-   verify.
-4. **Fail closed.** Missing, stale or ambiguous evidence = FAIL. Timeouts fail.
-   Parse errors fail.
-5. **Evidence is bound to the artifact.** Every check records the commit SHA and
-   image digest it applies to; evidence for a different one is rejected.
-6. **Everything is reproducible.** Each check stores its query, the raw response
-   hash, and the verdict.
-7. **The LLM never decides a verdict.** It may propose which checks a claim
-   needs; the check catalogue and verdict logic are deterministic code, reviewed
-   and versioned.
+| | |
+| --- | --- |
+| **Claims vs evidence** | Agents emit structured claims (MR notes). The verifier re-derives every number from the JUnit report, the container registry, the Cloud Run API, Cloud Monitoring and an exploit replay. A mismatch is a `claim_mismatch`: a caught lie. |
+| **Fixes proven by replay** | The Red Team's exploits run against a *pre-patch twin* of the build; the identical exploits must then fail against the hardened build. "Fixed" is demonstrated, not asserted. |
+| **Tests that must prove themselves** | Each regression test is run against the pre-patch twin, where it must **fail**, and against the patch, where it must **pass**. A test that passes on both (`assert True`) is rejected as a false claim. |
+| **A verifier that tests itself** | Every pipeline plants known lies (one per claim type, plus one about *this run's* real report). If the verifier misses any, the run blocks: a gate that always says PASS can't hide. |
+| **Who verified the verifier** | Every evidence pack carries a fingerprint of the exact verifier, playbook, gate wiring and agent prompts that judged it. MRs that touch that core are flagged and need CODEOWNER approval. |
+| **Earned autonomy** | A hash-chained trust ledger scores every agent's claims across runs. Agents whose claims keep verifying deploy unattended; an agent caught lying goes on probation (a human must approve its next promotion) and is suspended after repeated lies. |
+| **Signed, public record** | Each run's evidence pack is signed keyless with Sigstore cosign (pipeline OIDC identity, Rekor transparency log) and verified in a separate job pinned to this project's identity. A GitLab Pages dashboard shows the chain. |
+| **Proofs expire** | A scheduled job re-verifies that production still serves the last proven digest and is healthy, and opens an incident on drift. |
 
-### The CODEOWNERS boundary — the technical backbone
+## The trust model
 
-The trust-critical core — [`verifier/`](verifier/), [`redteam/`](redteam/),
-[`schemas/`](schemas/), [`flows/`](flows/), and [`.gitlab-ci.yml`](.gitlab-ci.yml) —
-is assigned to the human owner in [`CODEOWNERS`](CODEOWNERS). Combined with a
-protected `main` branch, **no build or patch agent can alter the checks, the
-exploits, the claim schema, or the gate wiring.** Agents may be imperfect; the
-gates cannot be edited by them. This is what makes "can't lie" true.
+1. **Claims are data, not truth.** Every agent ends its step by posting a
+   structured JSON claim ([`schemas/claim.schema.json`](schemas/claim.schema.json)).
+   Free-text summaries are never used for gating.
+2. **Evidence comes from authoritative sources only**: the GitLab API, the
+   container registry, the live service, the pinned exploit replay.
+3. **Separation of duties.** Verifier jobs read GitLab with a read-only token
+   and Google Cloud as a read-only service account; only deploy jobs hold the
+   deployer identity. Work jobs never judge (the `test` job succeeds even on
+   red tests; `verify:tests` is what fails).
+4. **Fail closed.** Missing, stale or ambiguous evidence is not a pass. A gate
+   that never ran did not pass. Empty SHAs match nothing.
+5. **Evidence is bound to the artifact.** Checks compare commit SHAs and image
+   digests; the promoted digest is the exact one the security gate replayed
+   against, and behaviour is baked into the image, not set at deploy time.
+6. **Reproducible.** Each check stores its query, a hash of the raw response,
+   and the verdict.
+7. **The LLM never decides a verdict.** Verdict logic is deterministic,
+   versioned code under CODEOWNERS.
+
+### The CODEOWNERS boundary
+
+[`CODEOWNERS`](CODEOWNERS) assigns the trust-critical core to a human: the
+verifier, exploit playbook, schemas, gate wiring (`.gitlab-ci.yml`, `ci/`),
+the scripts that turn CI output into evidence, the test harness (`conftest.py`,
+`pytest.ini`), and the agents' own prompts and flows. With a protected `main`
+and code-owner approval, **no agent can alter its own grader or instructions.**
+[`verifier/fingerprint.py`](verifier/fingerprint.py) hashes the same paths into
+every evidence pack, and a test keeps the two lists identical.
+
+### Threat model: what this does and doesn't stop
+
+- **Stops:** an agent misreporting test results, coverage, or which commit was
+  tested; claiming a vulnerability is fixed when the exploit still works;
+  shipping a regression test that doesn't test anything; promoting the
+  vulnerable twin or a different digest; adding `allow_failure` to the CI file;
+  production silently drifting from the proven digest; a broken or
+  rubber-stamping verifier; edited history in the trust ledger.
+- **Relies on GitLab settings:** protected `main` + code-owner approval (so
+  agents can't edit the core), and keeping the two tokens separate.
+- **Doesn't stop:** a weakness the playbook has no probe for, or tests that
+  are weak in ways other than "passes on the vulnerable build". The playbook
+  covers the seven seeded weaknesses, by design; it's not a general scanner
+  (GitLab SAST/dependency/secret scanning run alongside it).
 
 ## How a run works
 
 ```
-issue (labeled pcp::go)
-  → Planner   writes acceptance criteria + risk label         → plan.ready   ─┐
-  → Builder   implements change + tests, opens MR              → code.ready    │ each gate:
-  → CI        pytest (JUnit + coverage)                        → tests.pass    │ verify:<x>
-  → Verifier  checks the REAL report vs the claim  ◀───────────── blocks on ───┤ reads evidence,
-  → CI        build + push image (digest, SHA label)           → image.built   │ exits non-zero
-  → CI        deploy ephemeral staging (Cloud Run)                             │ on FAIL
-  → Red Team  runs the white-hat playbook on OUR staging       → attack.complete
-  → Blue Team patches each finding + regression test           → vuln.fixed    │
-  → Verifier  REPLAYS the exploits on the patched staging  ◀──── must now fail ─┤
-  → Release   merges, promotes the exact verified digest       → deploy.healthy │
-  → Verifier  confirms prod serves the digest, health probes                   ─┘
-  → Evidence  assemble + sign pack (cosign), post issue comment
-  → verify-evidence   independently checks the signature
+Issue assigned to the PCP Deliver flow (GitLab Duo)
+  Planner      acceptance criteria + risk label        claim plan.ready   ─▶ verify:plan     (live issue)
+  Builder      code + tests, MR "Closes #n"            claim code.ready   ─▶ verify:create   (MR API)
+                                                        claim tests.pass   ─▶ verify:tests    (JUnit + coverage)
+  CI           planted lies                                               ─▶ verify:canary   (verifier alive?)
+  CI           hardened image + pre-patch twin                            ─▶ verify:package  (registry labels)
+  Red Team     7 probes vs the twin (own staging only)
+  Blue Team    patches + regression tests (Duo flow on pipeline failure)
+                                                        claim vuln.fixed   ─▶ blueteam-verify (replay + fail-before/pass-after)
+  Trust        every agent in the run must be autonomous                  ─▶ policy:autonomy (ledger)
+  Release      promote the verified digest to Cloud Run claim deploy.healthy ─▶ verify:deploy (Cloud Run API + Monitoring; rollback)
+  Evidence     assemble + sign (cosign keyless)                           ─▶ verify-evidence (signature + decision)
+  Report       comment on issue/MR, follow-up issue if blocked, ledger, dashboard
 ```
 
-A gate that cannot verify its claim blocks promotion and opens a follow-up issue
-instead of advancing.
-
-## The three things this proves on camera
-
-| Scenario | What you see |
-| --- | --- |
-| **Happy path** | One issue goes to production with zero human clicks; every gate green. |
-| **Security gate** | The same SQL-injection that dumped the user table before the patch returns a safe 400 after it — proven by replay, not asserted. |
-| **Caught lie** | An agent claims "tests pass" but a test actually failed. The gate blocks, tags it `claim_mismatch`, and opens a follow-up issue. |
-
-Run all three offline, no cloud needed:
+## See it in 30 seconds (offline)
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m scripts.rehearse --scenario all
+python -m scripts.rehearse --scenario all --out rehearsal
 ```
 
-## The demo app and its (synthetic, seeded) weaknesses
+The rehearsal runs the real pipeline steps in-process: an honest change is
+**promoted**; a Blue Team patch that misses V1 is **blocked** (the same SQL
+injection still dumps the user tokens, and the "V1 fixed" claim is a caught
+lie), then the real patch is promoted; a Builder claiming "tests pass" over a
+real failure is **caught**. The ledger ends with the Builder and Blue Team on
+probation and opens a dashboard at `rehearsal/public/index.html`. (Offline,
+only the image digest and the signature are stand-ins, and both say so.)
 
-A small FastAPI "team notes" app ([`app/`](app/)) deliberately ships seven known
-weaknesses so the security gate has concrete, synthetic targets to find and fix.
-They toggle on a single `SECURE_MODE` flag, which makes the before/after replay
-crisp. These are standard pre-release security-test fixtures on the team's own
-code — the exploit runner refuses any host but the project's own ephemeral
-staging URL, and runs only in CI against synthetic data.
+## The demo app and its seeded weaknesses
+
+A small FastAPI "team notes" app ([`app/`](app/)) ships seven known weaknesses
+so the security gate has concrete, synthetic targets. The pipeline builds two
+images from every commit: the **hardened build** (what ships) and a
+**pre-patch twin** (hardening compiled out, vulnerable dependency installed)
+that only the Red Team ever sees. The exploit runner refuses any host but the
+run's own staging, and data is synthetic.
 
 | ID | Weakness | Fix |
 | --- | --- | --- |
@@ -103,52 +130,65 @@ staging URL, and runs only in CI against synthetic data.
 | V3 | IDOR on `GET /notes/{id}` | Ownership check |
 | V4 | Admin route with no auth | Require admin role |
 | V5 | Stack trace leaked on 500 | Generic error handler |
-| V6 | Vulnerable dependency pin | Bump to patched version |
+| V6 | Vulnerable dependency (python-multipart 0.0.6) | Patched version; `/healthz` reports the *installed* version |
 | V7 | Prompt injection in `/summarize` | Input/output guardrails |
 
 ## GitLab Duo Agent Platform
 
-Seven agents ([`agents/`](agents/)) each have a versioned prompt, a minimal
-allowed-tools list, and a scoped token. A Duo flow ([`flows/pipeline.flow.yaml`](flows/pipeline.flow.yaml))
-wires the hands-off sequence. The verifier and the exploit replay are exposed as
-**MCP tools** ([`mcp_tools/`](mcp_tools/)) so agents can *request* a check but
-never compute the verdict. The `.gitlab-ci.yml` encodes the identical gated
-logic as the guaranteed fallback, so the gates work with or without Duo.
+- **Flows** ([`duo/flows/`](duo/flows/)), generated from the prompts in
+  [`agents/`](agents/) and validated against GitLab's flow schema in CI:
+  - **PCP Deliver**: Planner → Builder. Triggered by assigning an issue.
+  - **PCP Blue Team**: Triage → Blue Team | Pipeline Fixer. Triggered by a
+    failed pipeline; conditional routing; bounded to 3 rounds.
+- **Agent**: **PCP Evidence Explainer** (Duo Chat) explains a verdict from the
+  signed pack.
+- **MCP**: the verifier and the exploit replay are MCP tools
+  ([`mcp_tools/`](mcp_tools/), [`.gitlab/duo/mcp.json`](.gitlab/duo/mcp.json)),
+  so an agent can *request* a check or a self-test but never compute the verdict.
+- Published to the AI Catalog by GitLab's catalog-sync component on tag pipelines.
+
+LLM agents do the creative work (plan, code, patch). Deterministic code does the
+attacking, judging and releasing. Without Duo the pipeline still runs every
+gate; claims are then synthesized by CI and marked `origin: ci-synthesized`.
 
 ## Google Cloud
 
-The app runs on Cloud Run (one ephemeral staging service per MR, one production
-service). Everything is infrastructure-as-code in [`infra/`](infra/) (Terraform),
-including GitLab→GCP **Workload Identity Federation**, so no long-lived key is
-stored. See [`SETUP.md`](SETUP.md) to stand it up.
+Cloud Run for an ephemeral twin + hardened staging pair per MR and for
+production; Artifact Registry (images copied from GitLab's registry with the
+digest preserved); Cloud Monitoring for the error-rate evidence; Workload
+Identity Federation restricted to this project's CI tokens, with separate
+deployer and read-only verifier identities. All in [`infra/`](infra/). See
+[`SETUP.md`](SETUP.md).
 
 ## Repository layout
 
 ```
-app/        FastAPI demo app (seeded weaknesses)
-tests/      pytest unit/integration + exploit self-tests + verifier tests
-agents/     one prompt per agent (+ claim_lib)
-verifier/   deterministic checks + catalogue + runner   (CODEOWNERS-protected)
-redteam/    white-hat exploit playbook + replay gate     (CODEOWNERS-protected)
-schemas/    claim + evidence JSON schemas                (CODEOWNERS-protected)
-flows/      Duo flow + agent definitions                 (CODEOWNERS-protected)
-mcp_tools/  MCP servers exposing verifier + replay as tools
-evidence_pack/  assemble, sign, and report the signed evidence pack
-infra/      Terraform + gcloud deploy scripts (Cloud Run, WIF)
-scripts/    CI helpers + the offline end-to-end rehearsal
-.gitlab-ci.yml   the gated pipeline spine                (CODEOWNERS-protected)
+app/            FastAPI demo app (seeded weaknesses, V1..V7)
+tests/          app, exploit self-tests, verifier, ledger, canary, sources, CI wiring
+agents/         one prompt per agent (source of truth for the Duo flows)   (CODEOWNERS)
+duo/            generated Duo flows + agent, vendored flow schema          (CODEOWNERS)
+verifier/       checks, catalogue, CLI, canary, fingerprint, ledger, gcp   (CODEOWNERS)
+redteam/        exploit playbook, replay gate, regression proof            (CODEOWNERS)
+schemas/        claim + evidence JSON schemas                              (CODEOWNERS)
+evidence_pack/  assemble + render the evidence pack                        (CODEOWNERS)
+scripts/        claims, signing, reporting, seeding, rehearsal             (CODEOWNERS)
+dashboard/      GitLab Pages dashboard from the ledger
+mcp_tools/      MCP servers exposing the verifier + replay
+infra/          Terraform + Cloud Run deploy scripts                       (CODEOWNERS)
+.gitlab-ci.yml  the gated pipeline                                         (CODEOWNERS)
 ```
 
 ## Tests
 
 ```bash
-python -m pytest        # 56 tests: app, exploit self-tests, verifier, evidence pack
+python -m pytest        # 111 tests, ~92% coverage of app/verifier/redteam/evidence_pack
 ```
 
-The exploit self-tests prove every probe succeeds on the vulnerable build and
-fails on the patched build — so the playbook can't drift. The verifier tests
-include a fixture where an agent's asserted number disagrees with the evidence,
-proving the lie is caught.
+Highlights: every probe must succeed on the twin and fail on the patch; every
+regression test must fail-before/pass-after; the canary must catch all planted
+lies and must notice a sabotaged check; the ledger must detect edited or
+deleted history; the CI graph must resolve; CODEOWNERS must match the
+fingerprinted core; the Duo flows must validate against GitLab's schema.
 
 ## License
 

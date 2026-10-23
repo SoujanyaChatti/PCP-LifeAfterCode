@@ -33,11 +33,15 @@ def main(argv=None) -> int:
     p.add_argument("--report", required=True)
     p.add_argument("--coverage", default=None)
     p.add_argument("--baseline", default=None, help="optional main test-count baseline")
+    p.add_argument("--commit", default=os.environ.get("CI_COMMIT_SHA", ""),
+                   help="commit the report was produced for (binds the evidence)")
     p.add_argument("--out", required=True)
     args = p.parse_args(argv)
 
     os.makedirs(args.out, exist_ok=True)
     report = parse_junit(args.report)
+    if args.commit:
+        report["commit_sha"] = args.commit
     with open(os.path.join(args.out, "test_report.json"), "w") as f:
         json.dump(report, f)
     cov = parse_coverage(args.coverage)

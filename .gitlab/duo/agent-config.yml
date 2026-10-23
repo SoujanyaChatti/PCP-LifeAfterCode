@@ -1,0 +1,16 @@
+# Execution environment for the PCP Duo flows (read from the default branch).
+# The Builder / Blue Team / Pipeline Fixer run the test suite inside it, so it
+# matches the CI test image.
+image: python:3.12-slim
+setup_script:
+  - pip install --quiet -r requirements-dev.txt
+cache:
+  key:
+    files:
+      - requirements.txt
+      - requirements-dev.txt
+    prefix: pcp-pip
+  paths:
+    - .cache/pip
+network_policy:
+  include_recommended_allowed: true
