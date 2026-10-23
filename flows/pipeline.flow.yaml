@@ -1,0 +1,102 @@
+# GitLab Duo flow — the hands-off issue-to-production sequence.
+#
+# Each step calls an agent or waits on a pipeline/verifier job outcome. A failed
+# gate routes to the fixer or blue-team branch; after the attempt budget it
+# routes to a human follow-up issue. Confirm Duo's exact flow schema in M0; the
+# .gitlab-ci.yml encodes the same graph as the guaranteed fallback.
+
+version: 1
+name: proof-carrying-pipeline
+
+trigger:
+  on: issue_label_added
+  label: "pcp::go"
+
+steps:
+  - id: plan
+    agent: planner
+    emits: plan.ready
+    gate: plan.ready            # verifier must PASS before continuing
+    on_fail: followup_issue
+
+  - id: build
+    agent: builder
+    needs: [plan]
+    emits: [code.ready, tests.pass]
+
+  - id: verify_create
+    gate: code.ready
+    needs: [build]
+    on_fail: followup_issue
+
+  - id: run_pipeline
+    wait_for: pipeline_for_mr
+    needs: [build]
+    on_fail: fix_pipeline
+
+  - id: fix_pipeline
+    agent: pipeline_fixer
+    max_attempts: 3
+    emits: pipeline.green
+    gate: pipeline.green
+    on_exhausted: followup_issue
+
+  - id: verify_tests
+    gate: tests.pass
+    needs: [run_pipeline]
+    on_fail: followup_issue      # includes caught-lie blocks
+
+  - id: package
+    wait_for: job:package
+    gate: image.built
+    needs: [verify_tests]
+
+  - id: deploy_staging
+    wait_for: job:deploy-staging
+    needs: [package]
+
+  - id: redteam
+    agent: redteam
+    needs: [deploy_staging]
+    emits: attack.complete
+
+  - id: blueteam
+    agent: blueteam
+    needs: [redteam]
+    when: findings_present
+    max_attempts: 3
+    emits: vuln.fixed
+
+  - id: security_gate
+    wait_for: job:blueteam-verify   # verifier replays exploits
+    gate: vuln.fixed
+    needs: [blueteam]
+    on_exhausted: followup_issue
+
+  - id: release
+    agent: release
+    needs: [security_gate]
+    emits: deploy.healthy
+
+  - id: verify_deploy
+    gate: deploy.healthy
+    needs: [release]
+    on_fail: rollback
+
+  - id: evidence
+    wait_for: [job:evidence, job:verify-evidence]
+    needs: [verify_deploy]
+
+  - id: report
+    agent: reporter
+    needs: [evidence]
+    always: true                 # runs on PROMOTED or BLOCKED
+
+handlers:
+  followup_issue:
+    action: create_issue
+    labels: ["pcp::blocked", "needs-human"]
+  rollback:
+    action: cloud_run_rollback
+    then: create_issue
+    labels: ["incident", "pcp::rollback"]
