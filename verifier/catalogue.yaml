@@ -1,0 +1,60 @@
+# Check catalogue — the versioned map from a claim type to the set of checks
+# that must ALL return PASS (for the same commit SHA and image digest) before a
+# gate opens. This file is under CODEOWNERS; no build agent can edit it.
+#
+# Each check id resolves to a function in verifier/checks/. Verdict logic lives
+# in code; the LLM may only propose which claim a step needs, never the verdict.
+
+version: 1
+
+tolerances:
+  coverage_pct: 1.0        # asserted vs observed coverage, absolute points
+  coverage_floor: 70.0     # minimum acceptable line coverage
+  error_rate_max: 0.02     # max 5xx fraction over the health window
+  health_probes_required: 5
+
+claims:
+  plan.ready:
+    stage: plan
+    checks:
+      - plan.has_acceptance_criteria
+      - plan.risk_label_set
+
+  code.ready:
+    stage: create
+    checks:
+      - code.mr_exists
+      - code.targets_main
+      - code.head_sha_matches
+
+  tests.pass:
+    stage: verify
+    checks:
+      - tests.junit_zero_failures
+      - tests.count_not_lower_than_main
+      - tests.coverage_within_tolerance
+
+  pipeline.green:
+    stage: verify
+    checks:
+      - pipeline.latest_succeeded
+      - pipeline.no_allow_failure_added
+
+  image.built:
+    stage: package
+    checks:
+      - image.digest_exists
+      - image.built_from_claimed_sha
+
+  vuln.fixed:
+    stage: secure
+    checks:
+      - vuln.replay_now_fails
+      - vuln.regression_test_present
+
+  deploy.healthy:
+    stage: release
+    checks:
+      - deploy.serves_claimed_digest
+      - deploy.health_probes_pass
+      - deploy.error_rate_below_threshold
