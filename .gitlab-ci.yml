@@ -1,0 +1,227 @@
+# Proof-Carrying Pipeline — the gated spine.
+#
+# Pattern per gated stage: a WORK job produces a claim + evidence; a verify:<x>
+# job consumes the claim plus AUTHORITATIVE evidence and exits non-zero on FAIL,
+# which blocks the next stage. Verifier jobs use VERIFIER_READONLY_TOKEN, which
+# is distinct from the agent token — no job can both build and verify.
+#
+# This CI file IS the guaranteed implementation of the flow in flows/. It is
+# under CODEOWNERS; a build agent cannot weaken it (and verify:tests fails the
+# gate if an allow_failure:true is added in an MR).
+
+stages:
+  - plan
+  - build
+  - test
+  - verify-tests
+  - scan
+  - package
+  - verify-package
+  - deploy-staging
+  - redteam
+  - blueteam-verify
+  - deploy-prod
+  - verify-deploy
+  - evidence
+  - verify-evidence
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip"
+  IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+
+default:
+  image: python:3.12-slim
+  cache:
+    paths: [.pip/]
+  before_script:
+    - pip install --quiet -r requirements-dev.txt
+
+# ---------------------------------------------------------------------------
+# PLAN — Planner agent writes acceptance criteria + risk label (or CI fallback)
+# ---------------------------------------------------------------------------
+plan:
+  stage: plan
+  script:
+    - echo "Planner agent runs via Duo flow; see flows/pipeline.flow.yaml."
+    - echo "CI fallback would invoke agents/planner/prompt.md via the API."
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" || $CI_COMMIT_BRANCH'
+
+# ---------------------------------------------------------------------------
+# TEST — pytest, JUnit + coverage (authoritative evidence for verify:tests)
+# ---------------------------------------------------------------------------
+test:
+  stage: test
+  script:
+    - pip install --quiet -r requirements-dev.txt
+    - python -m pytest --junitxml=report.xml --cov=app --cov=verifier --cov=redteam
+        --cov-report=term --cov-report=xml
+  coverage: '/TOTAL.*\s(\d+\.\d+)%/'
+  artifacts:
+    when: always
+    paths: [report.xml, coverage.xml]
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+
+# Builder agent emits the tests.pass claim as an artifact (claims/tests.pass.json).
+# For CI-only runs we synthesize it from the real report so the gate has input.
+make-claim:tests:
+  stage: test
+  needs: [test]
+  script:
+    - python scripts/claim_from_report.py --report report.xml --out claims/tests.pass.json
+  artifacts:
+    paths: [claims/tests.pass.json]
+
+verify:tests:
+  stage: verify-tests
+  needs: [test, make-claim:tests]
+  variables:
+    VERIFIER_READONLY_TOKEN: "$VERIFIER_READONLY_TOKEN"
+  script:
+    - python scripts/report_to_fixture.py --report report.xml --coverage coverage.xml --out /tmp/fx
+    - python -m verifier.run --claim claims/tests.pass.json --out evidence --fixtures /tmp/fx
+  artifacts:
+    when: always
+    paths: [evidence/]
+
+# ---------------------------------------------------------------------------
+# SCAN — GitLab SAST / dependency scanning / secret detection
+# ---------------------------------------------------------------------------
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Dependency-Scanning.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
+# ---------------------------------------------------------------------------
+# PACKAGE — build + push image, record digest, label with commit SHA
+# ---------------------------------------------------------------------------
+package:
+  stage: package
+  needs: [verify:tests]
+  image: docker:27
+  services: [docker:27-dind]
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build --build-arg COMMIT_SHA=$CI_COMMIT_SHA -t "$IMAGE" .
+    - docker push "$IMAGE"
+    - DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE")
+    - mkdir -p claims && echo "{\"digest\":\"$DIGEST\",\"sha\":\"$CI_COMMIT_SHA\"}" > claims/image.json
+  artifacts:
+    paths: [claims/image.json]
+
+verify:package:
+  stage: verify-package
+  needs: [package]
+  script:
+    - python scripts/verify_image.py --image-claim claims/image.json --out evidence
+  artifacts:
+    when: always
+    paths: [evidence/]
+
+# ---------------------------------------------------------------------------
+# DEPLOY STAGING — ephemeral Cloud Run service per MR (see infra/)
+# ---------------------------------------------------------------------------
+deploy-staging:
+  stage: deploy-staging
+  needs: [verify:package]
+  image: google/cloud-sdk:slim
+  script:
+    - bash infra/deploy_staging.sh
+  environment:
+    name: staging/$CI_MERGE_REQUEST_IID
+    on_stop: stop-staging
+  artifacts:
+    reports:
+      dotenv: staging.env   # exports STAGING_URL for later jobs
+
+stop-staging:
+  stage: deploy-staging
+  needs: [deploy-staging]
+  image: google/cloud-sdk:slim
+  when: manual
+  script:
+    - bash infra/teardown_staging.sh
+  environment:
+    name: staging/$CI_MERGE_REQUEST_IID
+    action: stop
+
+# ---------------------------------------------------------------------------
+# REDTEAM — authorized white-hat playbook against our OWN staging
+# ---------------------------------------------------------------------------
+redteam:
+  stage: redteam
+  needs: [deploy-staging]
+  script:
+    - python -m redteam.attack --staging "$STAGING_URL" --out evidence/redteam
+  artifacts:
+    when: always
+    paths: [evidence/redteam/]
+
+# ---------------------------------------------------------------------------
+# BLUETEAM-VERIFY — verifier replays the previously-successful exploits on the
+# patched staging. Blocks deploy-prod. (Blue Team patch commits happen via the
+# flow between redeploy and this job.)
+# ---------------------------------------------------------------------------
+blueteam-verify:
+  stage: blueteam-verify
+  needs: [redteam]
+  script:
+    - python -m redteam.replay_gate --staging "$STAGING_URL"
+        --findings evidence/redteam/findings.json --out evidence/redteam
+  artifacts:
+    when: always
+    paths: [evidence/redteam/]
+
+# ---------------------------------------------------------------------------
+# DEPLOY PROD — only on main, only after all gates. Promotes the exact digest.
+# ---------------------------------------------------------------------------
+deploy-prod:
+  stage: deploy-prod
+  needs: [blueteam-verify]
+  image: google/cloud-sdk:slim
+  script:
+    - bash infra/deploy_prod.sh
+  environment:
+    name: production
+    url: $PROD_URL
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+verify:deploy:
+  stage: verify-deploy
+  needs: [deploy-prod]
+  script:
+    - python -m verifier.run --claim claims/deploy.healthy.json --out evidence
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  artifacts:
+    when: always
+    paths: [evidence/]
+
+# ---------------------------------------------------------------------------
+# EVIDENCE — assemble + sign the pack, post the issue comment
+# ---------------------------------------------------------------------------
+evidence:
+  stage: evidence
+  needs: [verify:tests, verify:package]
+  when: always
+  script:
+    - echo "{\"issue_iid\":\"$ISSUE_IID\",\"mr_iid\":\"$CI_MERGE_REQUEST_IID\",\"commit_sha\":\"$CI_COMMIT_SHA\",\"image_digest\":\"$(cat claims/image.json 2>/dev/null)\",\"pipeline_id\":\"$CI_PIPELINE_ID\"}" > run_meta.json
+    - python -m evidence_pack.assemble --claims claims --evidence evidence --redteam evidence/redteam --meta run_meta.json --out evidence-pack.json || true
+    - bash scripts/sign_pack.sh evidence-pack.json.canonical
+    - python -m evidence_pack.report --pack evidence-pack.json --pack-url "$CI_JOB_URL" --out issue-comment.md
+  artifacts:
+    when: always
+    paths: [evidence-pack.json, evidence-pack.json.canonical, evidence-pack.json.sig, issue-comment.md]
+
+verify-evidence:
+  stage: verify-evidence
+  needs: [evidence]
+  when: always
+  script:
+    - bash scripts/verify_pack.sh evidence-pack.json

@@ -13,7 +13,11 @@ import uuid
 from datetime import datetime, timezone
 
 CLAIM_MARKER = "<!-- pcp-claim -->"
-CLAIMS_DIR = os.environ.get("PCP_CLAIMS_DIR", "claims")
+
+
+def _claims_dir() -> str:
+    # Read at call time so callers can set PCP_CLAIMS_DIR after import.
+    return os.environ.get("PCP_CLAIMS_DIR", "claims")
 
 
 def emit_claim(
@@ -36,8 +40,9 @@ def emit_claim(
         "asserted": asserted,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    os.makedirs(CLAIMS_DIR, exist_ok=True)
-    path = os.path.join(CLAIMS_DIR, f"{claim_type}.json")
+    claims_dir = _claims_dir()
+    os.makedirs(claims_dir, exist_ok=True)
+    path = os.path.join(claims_dir, f"{claim_type}.json")
     with open(path, "w") as f:
         json.dump(claim, f, indent=2)
     return claim
