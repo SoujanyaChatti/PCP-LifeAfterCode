@@ -255,12 +255,18 @@ class CloudRunSource:
     the 5xx rate from Cloud Monitoring, using the verifier's own read-only
     identity (see verifier/gcp.py)."""
 
+    # Checks name the logical environment; this maps it to the Cloud Run service.
+    SERVICES = {"production": os.environ.get("PCP_PROD_SERVICE", "pcp-prod")}
+
     def __init__(self, project: str, region: str, token: str):
         import httpx
 
         self._project, self._region = project, region
         self._client = httpx.Client(headers={"Authorization": f"Bearer {token}"},
                                     timeout=30.0)
+
+    def _service(self, name: str) -> str:
+        return self.SERVICES.get(name, name)
 
     def _run(self, kind: str, name: str) -> dict:
         r = self._client.get(
@@ -271,7 +277,7 @@ class CloudRunSource:
 
     def deploy_digest(self, service: str) -> Optional[str]:
         """Digest of the revision receiving 100% of traffic, or None."""
-        svc = self._run("services", service)
+        svc = self._run("services", self._service(service))
         serving = [t for t in svc.get("status", {}).get("traffic", [])
                    if t.get("percent") == 100]
         if not serving:
@@ -301,7 +307,7 @@ class CloudRunSource:
             f"https://monitoring.googleapis.com/v3/projects/{self._project}/timeSeries",
             params={
                 "filter": ('metric.type="run.googleapis.com/request_count" AND '
-                           f'resource.labels.service_name="{service}"'),
+                           f'resource.labels.service_name="{self._service(service)}"'),
                 "interval.startTime": start.isoformat().replace("+00:00", "Z"),
                 "interval.endTime": end.isoformat().replace("+00:00", "Z"),
                 "aggregation.alignmentPeriod": f"{window_s}s",

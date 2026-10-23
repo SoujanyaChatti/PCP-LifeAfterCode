@@ -7,8 +7,9 @@
 # test job always succeeds and verify:tests is what fails on a red report.
 #
 # Verifier jobs read GitLab with VERIFIER_READONLY_TOKEN and Google Cloud as
-# GCP_VERIFIER_SA (read-only); deploy jobs use GCP_DEPLOY_SA. No job can both
-# build and verify. This file is under CODEOWNERS.
+# GCP_VERIFIER_SA (read-only). Staging deploys use GCP_STAGING_SA; only
+# protected-branch jobs can obtain GCP_DEPLOY_SA (production), enforced by the
+# WIF binding in infra/main.tf. No job can both build and verify. This file is under CODEOWNERS.
 #
 # Works in two modes:
 #   - without Google Cloud: the security gate attacks the images as CI service
@@ -51,6 +52,7 @@ stages:
   - evidence
   - verify-evidence
   - report
+  - deploy   # used only by the AI Catalog sync component (ci/duo-catalog.yml)
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip"
@@ -86,8 +88,12 @@ variables:
 .gcloud:
   extends: .gcp
   image: google/cloud-sdk:slim
+  variables:
+    GCP_SA: $GCP_STAGING_SA   # jobs that touch production override with GCP_DEPLOY_SA
   before_script:
-    - export CLOUDSDK_AUTH_ACCESS_TOKEN=$(python3 -m verifier.gcp token --sa "$GCP_DEPLOY_SA")
+    # Two steps, so a failed token exchange fails here (export masks it).
+    - TOKEN=$(python3 -m verifier.gcp token --sa "$GCP_SA")
+    - export CLOUDSDK_AUTH_ACCESS_TOKEN="$TOKEN"
     - gcloud config set project "$GCP_PROJECT"
 
 # The pre-patch twin and the hardened build, as service containers. Used by the
@@ -123,7 +129,8 @@ verify:trust-core:
     - if: $PCP_KIND == "mr"
   variables:
     GIT_DEPTH: "0"   # the MR's diff base must be in history
-  before_script: []
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
   script:
     - python -m verifier.fingerprint --against "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
         --out trust_core.json || true
@@ -243,7 +250,8 @@ package:
       if [ -n "$GCP_PROJECT" ]; then
         curl -sSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar -xz -C /usr/local/bin crane
         crane auth login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
-        python3 -m verifier.gcp token --sa "$GCP_DEPLOY_SA" | crane auth login "${GCP_REGION}-docker.pkg.dev" -u oauth2accesstoken --password-stdin
+        AR_TOKEN=$(python3 -m verifier.gcp token --sa "$GCP_STAGING_SA")
+        crane auth login "${GCP_REGION}-docker.pkg.dev" -u oauth2accesstoken -p "$AR_TOKEN"
         AR="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/pcp/app"
         crane copy "$CI_REGISTRY_IMAGE@$DIGEST" "$AR:$CI_COMMIT_SHA"
         crane copy "$CI_REGISTRY_IMAGE@$TWIN_DIGEST" "$AR:$CI_COMMIT_SHA-prepatch"
@@ -276,6 +284,8 @@ deploy-staging:
   extends: [.gcloud]
   stage: deploy-staging
   needs: [package, verify:package]
+  resource_group: staging-$STAGING_ID   # one deploy at a time per MR/branch
+  interruptible: true
   script:
     - bash infra/deploy_staging.sh
   environment:
@@ -314,6 +324,7 @@ redteam:
       optional: true
   script:
     - export STAGING_URL_PRE="${STAGING_URL_PRE:-http://pcp-pre:8080}"
+    - python -m redteam.check_targets --pre "$STAGING_URL_PRE"
     - python -m redteam.attack --staging "$STAGING_URL_PRE" --out evidence/redteam
   artifacts:
     when: always
@@ -334,6 +345,7 @@ blueteam-verify:
   script:
     - export STAGING_URL_PRE="${STAGING_URL_PRE:-http://pcp-pre:8080}"
     - export STAGING_URL="${STAGING_URL:-http://pcp-post:8080}"
+    - python -m redteam.check_targets --pre "$STAGING_URL_PRE" --post "$STAGING_URL"
     - python -m redteam.replay_gate --staging "$STAGING_URL"
         --findings evidence/redteam/findings.json --out evidence/redteam || true
     - python -m redteam.prove_regressions --pre-url "$STAGING_URL_PRE"
@@ -365,6 +377,8 @@ deploy-prod:
   needs: [blueteam-verify, "policy:autonomy", package]
   rules:
     - if: $GCP_PROJECT && $PCP_KIND == "main"
+  variables:
+    GCP_SA: $GCP_DEPLOY_SA
   script:
     - bash infra/deploy_prod.sh
   environment:
@@ -397,6 +411,8 @@ rollback:
   rules:
     - if: $GCP_PROJECT && $PCP_KIND == "main"
       when: on_failure
+  variables:
+    GCP_SA: $GCP_DEPLOY_SA
   script:
     - test -n "$PREV_REVISION" || { echo "no previous revision to roll back to"; exit 1; }
     - gcloud run services update-traffic pcp-prod --region "$GCP_REGION"

@@ -5,17 +5,27 @@
 # checks it independently against the Cloud Run API and Cloud Monitoring
 # (verify:deploy). Exports PROD_URL and PREV_REVISION (dotenv) for rollback.
 set -euo pipefail
+shopt -s inherit_errexit
 
 : "${GCP_PROJECT:?}" "${GCP_REGION:=us-central1}"
-SERVICE="pcp-prod"
-read -r REF DIGEST < <(python3 -c 'import json;d=json.load(open("build/images.json"));print(d["ar_ref"],d["digest"])')
-: "${REF:?no Artifact Registry ref in build/images.json}"
+SERVICE="${PCP_PROD_SERVICE:-pcp-prod}"
+REFS=$(python3 -c 'import json;d=json.load(open("build/images.json"));print(d["ar_ref"],d["digest"])')
+read -r REF DIGEST <<<"$REFS"
+[ -n "${REF:-}" ] || { echo "no Artifact Registry ref in build/images.json" >&2; exit 1; }
 
-PREV=$(gcloud run services describe "$SERVICE" --region="$GCP_REGION" \
-  --format='value(status.latestReadyRevisionName)' 2>/dev/null || echo "")
+# Roll back to what is SERVING now (the revision with 100% of traffic), not to
+# the latest ready revision: after an earlier rollback those differ.
+PREV=$(gcloud run services describe "$SERVICE" --region="$GCP_REGION" --format=json 2>/dev/null \
+  | python3 -c 'import json,sys
+try: t=json.load(sys.stdin).get("status",{}).get("traffic",[])
+except ValueError: t=[]
+print(next((x["revisionName"] for x in t if x.get("percent")==100 and x.get("revisionName")),""))' || true)
 
 gcloud run deploy "$SERVICE" --image="$REF" --region="$GCP_REGION" --platform=managed \
   --allow-unauthenticated --max-instances=4 --labels=pcp=prod --quiet
+# A previous rollback pinned traffic to an old revision; Cloud Run keeps that
+# split for later deploys. Send 100% to the revision we just deployed.
+gcloud run services update-traffic "$SERVICE" --region="$GCP_REGION" --to-latest --quiet
 
 URL=$(gcloud run services describe "$SERVICE" --region="$GCP_REGION" --format='value(status.url)')
 printf 'PROD_URL=%s\nPREV_REVISION=%s\n' "$URL" "$PREV" | tee prod.env

@@ -156,8 +156,9 @@ gate; claims are then synthesized by CI and marked `origin: ci-synthesized`.
 Cloud Run for an ephemeral twin + hardened staging pair per MR and for
 production; Artifact Registry (images copied from GitLab's registry with the
 digest preserved); Cloud Monitoring for the error-rate evidence; Workload
-Identity Federation restricted to this project's CI tokens, with separate
-deployer and read-only verifier identities. All in [`infra/`](infra/). See
+Identity Federation restricted to this project's CI tokens, with three
+identities: a production deployer only protected-branch jobs can obtain, a
+staging deployer, and a read-only verifier. All in [`infra/`](infra/). See
 [`SETUP.md`](SETUP.md).
 
 ## Repository layout
@@ -181,7 +182,7 @@ infra/          Terraform + Cloud Run deploy scripts                       (CODE
 ## Tests
 
 ```bash
-python -m pytest        # 111 tests, ~92% coverage of app/verifier/redteam/evidence_pack
+python -m pytest        # 112 tests, ~92% coverage of app/verifier/redteam/evidence_pack
 ```
 
 Highlights: every probe must succeed on the twin and fail on the patch; every

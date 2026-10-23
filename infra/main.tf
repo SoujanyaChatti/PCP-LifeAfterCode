@@ -50,46 +50,59 @@ resource "google_artifact_registry_repository" "images" {
   depends_on    = [google_project_service.services]
 }
 
+# Three identities, so no CI job holds more than its step needs:
+#   pcp-deployer  production deploys/rollback; ONLY protected-branch jobs
+#   pcp-staging   per-MR staging services + image pushes; any branch
+#   pcp-verifier  read-only: which revision serves traffic, request metrics
+# Caveat: pcp-staging needs roles/run.admin (to allow unauthenticated staging),
+# which is project-wide. For hard isolation, run production in its own project.
 resource "google_service_account" "deployer" {
   account_id   = "pcp-deployer"
-  display_name = "PCP CI deployer"
+  display_name = "PCP production deployer (protected branches only)"
+  depends_on   = [google_project_service.services]
 }
 
-resource "google_project_iam_member" "deployer_run" {
-  project = var.project_id
-  role    = "roles/run.admin"
-  member  = "serviceAccount:${google_service_account.deployer.email}"
+resource "google_service_account" "staging" {
+  account_id   = "pcp-staging"
+  display_name = "PCP staging deployer"
+  depends_on   = [google_project_service.services]
 }
 
-resource "google_project_iam_member" "deployer_sa_user" {
-  project = var.project_id
-  role    = "roles/iam.serviceAccountUser"
-  member  = "serviceAccount:${google_service_account.deployer.email}"
-}
-
-# The verifier only reads: which revision serves traffic, and request metrics.
 resource "google_service_account" "verifier" {
   account_id   = "pcp-verifier"
   display_name = "PCP verifier (read-only)"
+  depends_on   = [google_project_service.services]
 }
 
-resource "google_project_iam_member" "verifier_ro" {
-  for_each = toset(["roles/run.viewer", "roles/monitoring.viewer"])
+locals {
+  roles = {
+    deployer_run     = ["deployer", "roles/run.admin"]
+    deployer_sa_user = ["deployer", "roles/iam.serviceAccountUser"]
+    staging_run      = ["staging", "roles/run.admin"]
+    staging_sa_user  = ["staging", "roles/iam.serviceAccountUser"]
+    staging_ar       = ["staging", "roles/artifactregistry.writer"]
+    verifier_run     = ["verifier", "roles/run.viewer"]
+    verifier_mon     = ["verifier", "roles/monitoring.viewer"]
+  }
+  sa_email = {
+    deployer = google_service_account.deployer.email
+    staging  = google_service_account.staging.email
+    verifier = google_service_account.verifier.email
+  }
+}
+
+resource "google_project_iam_member" "roles" {
+  for_each = local.roles
   project  = var.project_id
-  role     = each.value
-  member   = "serviceAccount:${google_service_account.verifier.email}"
+  role     = each.value[1]
+  member   = "serviceAccount:${local.sa_email[each.value[0]]}"
 }
 
-resource "google_project_iam_member" "deployer_ar" {
-  project = var.project_id
-  role    = "roles/artifactregistry.writer"
-  member  = "serviceAccount:${google_service_account.deployer.email}"
-}
-
-# --- Workload Identity Federation: GitLab CI OIDC -> deployer SA ---
+# --- Workload Identity Federation: GitLab CI OIDC -> service accounts ---
 resource "google_iam_workload_identity_pool" "gitlab" {
   workload_identity_pool_id = "gitlab-pool"
   display_name              = "GitLab CI pool"
+  depends_on                = [google_project_service.services]
 }
 
 resource "google_iam_workload_identity_pool_provider" "gitlab" {
@@ -97,10 +110,12 @@ resource "google_iam_workload_identity_pool_provider" "gitlab" {
   workload_identity_pool_provider_id = "gitlab-oidc"
   display_name                       = "GitLab OIDC"
   attribute_mapping = {
-    "google.subject"           = "assertion.sub"
+    # google.subject is capped at 127 bytes; GitLab's `sub` can exceed it.
+    "google.subject"           = "\"gitlab:\" + assertion.project_id + \":\" + assertion.job_id"
     "attribute.project_path"   = "assertion.project_path"
     "attribute.namespace_path" = "assertion.namespace_path"
     "attribute.ref"            = "assertion.ref"
+    "attribute.ref_protected"  = "assertion.ref_protected"
   }
   # gitlab.com is a shared issuer: only tokens minted for THIS project count.
   attribute_condition = "assertion.project_path == \"${var.gitlab_project_path}\""
@@ -110,11 +125,24 @@ resource "google_iam_workload_identity_pool_provider" "gitlab" {
   }
 }
 
-resource "google_service_account_iam_member" "wif_bind" {
-  for_each           = { deployer = google_service_account.deployer.name, verifier = google_service_account.verifier.name }
+locals {
+  pool_principals = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.gitlab.name}"
+}
+
+# Production deployer: only jobs on protected refs (main) of this project.
+resource "google_service_account_iam_member" "wif_deployer" {
+  service_account_id = google_service_account.deployer.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "${local.pool_principals}/attribute.ref_protected/true"
+}
+
+# Staging + verifier: any job of this project (the provider condition already
+# restricts tokens to this project).
+resource "google_service_account_iam_member" "wif_any_ref" {
+  for_each           = { staging = google_service_account.staging.name, verifier = google_service_account.verifier.name }
   service_account_id = each.value
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.gitlab.name}/attribute.project_path/${var.gitlab_project_path}"
+  member             = "${local.pool_principals}/attribute.project_path/${var.gitlab_project_path}"
 }
 
 # Production service (initial placeholder image; the pipeline promotes digests).
@@ -151,6 +179,7 @@ output "wif_provider" {
 }
 output "deployer_sa" { value = google_service_account.deployer.email }
 output "verifier_sa" { value = google_service_account.verifier.email }
+output "staging_sa" { value = google_service_account.staging.email }
 
 output "gitlab_ci_variables" {
   description = "Paste into GitLab > Settings > CI/CD > Variables"
@@ -159,6 +188,7 @@ output "gitlab_ci_variables" {
     GCP_REGION=${var.region}
     GCP_WIF_PROVIDER=${google_iam_workload_identity_pool_provider.gitlab.name}
     GCP_DEPLOY_SA=${google_service_account.deployer.email}
+    GCP_STAGING_SA=${google_service_account.staging.email}
     GCP_VERIFIER_SA=${google_service_account.verifier.email}
     PROD_URL=${google_cloud_run_v2_service.prod.uri}
   EOT

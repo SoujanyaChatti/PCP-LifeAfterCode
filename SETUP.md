@@ -15,7 +15,7 @@ any step and still have a working, demonstrable pipeline.
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest                                    # 111 tests
+python -m pytest                                    # 112 tests
 python -m scripts.rehearse --scenario all --out rehearsal
 open rehearsal/public/index.html                    # the dashboard, from the local ledger
 ```
@@ -58,14 +58,20 @@ terraform init
 terraform apply -var project_id=<GCP_PROJECT_ID> -var gitlab_project_path=<group>/pcp-lifeaftercode
 terraform output gitlab_ci_variables
 ```
-This creates Artifact Registry (`pcp`), the production Cloud Run service, a
-deployer and a **read-only verifier** service account, and Workload Identity
-Federation restricted to your project's CI tokens (no keys anywhere).
+This creates Artifact Registry (`pcp`), the production Cloud Run service, three
+service accounts and Workload Identity Federation restricted to your project's
+CI tokens (no keys anywhere):
+
+- `pcp-deployer`: production deploys and rollback. Only jobs on **protected**
+  refs can obtain it, so an MR branch can't touch production even with an
+  edited CI file.
+- `pcp-staging`: per-MR staging services and image pushes.
+- `pcp-verifier`: read-only (Cloud Run viewer, Monitoring viewer).
 
 ## 4. Connect GitLab to Google Cloud
 Paste the `gitlab_ci_variables` output into **Settings → CI/CD → Variables**:
 `GCP_PROJECT`, `GCP_REGION`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`,
-`GCP_VERIFIER_SA`, `PROD_URL`.
+`GCP_STAGING_SA`, `GCP_VERIFIER_SA`, `PROD_URL`.
 
 From now on, MR pipelines deploy two ephemeral Cloud Run services (the pre-patch
 twin the Red Team attacks, and the hardened build the verifier replays against);

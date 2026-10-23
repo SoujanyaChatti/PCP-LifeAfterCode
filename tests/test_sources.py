@@ -104,6 +104,7 @@ def _cloudrun_handler(traffic, series):
             return httpx.Response(200, json={"status": {
                 "imageDigest": "us-docker.pkg.dev/p/pcp/app@sha256:abc"}})
         if "timeSeries" in p:
+            assert 'service_name="pcp-prod"' in req.url.params["filter"]
             return httpx.Response(200, json={"timeSeries": series})
         return httpx.Response(404)
 
@@ -119,7 +120,9 @@ def test_cloudrun_source_digest_and_error_rate(monkeypatch):
         [{"revisionName": "rev-2", "percent": 100}], series))
     src = CloudRunSource("p", "us-central1", "tok")
     assert src.deploy_digest("pcp-prod") == "sha256:abc"
-    assert src.error_rate("pcp-prod") == {"rate": 0.02, "requests": 100,
+    # Checks ask for the environment "production"; it must map to pcp-prod.
+    assert src.deploy_digest("production") == "sha256:abc"
+    assert src.error_rate("production") == {"rate": 0.02, "requests": 100,
                                           "source": "cloud_monitoring"}
 
 
