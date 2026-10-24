@@ -16,6 +16,7 @@ from __future__ import annotations
 import html
 import os
 from importlib import metadata
+from urllib.parse import quote
 
 from contextlib import asynccontextmanager
 
@@ -94,6 +95,10 @@ def healthz() -> dict:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     mode = "secure" if SECURE_MODE else "pre-patch twin"
+    tag_links = " ".join(
+        f'<a href="/search?tag={quote(t)}">{html.escape(t)}</a>'
+        for t in db.list_tags()
+    )
     return (
         "<!doctype html><html><head><title>Team Notes</title></head>"
         f"<body><h1>Team Notes</h1><p>build: {html.escape(APP_VERSION)} "
@@ -101,6 +106,7 @@ def index() -> str:
         '<form action="/search" method="get">'
         '<input name="q" placeholder="search notes"/>'
         '<button type="submit">Search</button></form>'
+        f"<p class='tag-picker'>Filter by tag: {tag_links}</p>"
         "</body></html>"
     )
 
@@ -109,7 +115,7 @@ def index() -> str:
 # V1: SQL injection in note search  /  V2: reflected XSS in the echo
 # --------------------------------------------------------------------------
 @app.get("/search", response_class=HTMLResponse)
-def search(q: str = Query(default="")) -> str:
+def search(q: str = Query(default=""), tag: str = Query(default="")) -> str:
     with db.cursor() as cur:
         if hardened("V1"):
             # V1 fix: parameterized query.
@@ -127,6 +133,16 @@ def search(q: str = Query(default="")) -> str:
             cur.execute(sql)
         rows = cur.fetchall()
 
+    # Tag filter (applied after the query, so it adds no SQL surface).
+    rows = db.filter_by_tag(rows, tag)
+    active_tag = db.normalize_tag(tag)
+    tag_note = (
+        f" <small>(tag: {html.escape(active_tag)}) "
+        f"<a href='/search?q={quote(q)}'>clear filter</a></small>"
+        if active_tag
+        else ""
+    )
+
     # V2: the search term is echoed back into the page.
     echo = html.escape(q) if hardened("V2") else q  # V2 fix: escape output.
     items = "".join(
@@ -136,9 +152,30 @@ def search(q: str = Query(default="")) -> str:
         for r in rows
     )
     return (
-        f"<!doctype html><html><body><h2>Results for: {echo}</h2>"
+        f"<!doctype html><html><body><h2>Results for: {echo}{tag_note}</h2>"
         f"<ul>{items}</ul></body></html>"
     )
+
+
+# --------------------------------------------------------------------------
+# Note listing with optional tag filter:  GET /notes?tag=work
+# Returns the caller's own notes (auth required); `tag` narrows them to notes
+# carrying that tag. Matching is exact and case-insensitive; a blank tag means
+# no filter; an unknown tag yields an empty list.
+# --------------------------------------------------------------------------
+@app.get("/notes")
+def list_notes(tag: str = Query(default=""), user=Depends(current_user)) -> JSONResponse:
+    if user is None:
+        raise HTTPException(status_code=401, detail="authentication required")
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, owner_id, title, body, tags FROM notes "
+            "WHERE owner_id = ? ORDER BY id",
+            (user["id"],),
+        )
+        rows = cur.fetchall()
+    rows = db.filter_by_tag(rows, tag)
+    return JSONResponse({"notes": [dict(r) for r in rows]})
 
 
 # --------------------------------------------------------------------------

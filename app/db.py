@@ -81,6 +81,37 @@ def init_db(reset: bool = False) -> None:
             )
 
 
+def normalize_tag(tag: Optional[str]) -> str:
+    """Canonical form of a tag: surrounding whitespace stripped, lower-cased.
+
+    Tag matching is EXACT on the canonical form, and case-insensitive:
+    `Work`, `work` and ` WORK ` are the same tag; `wor` and `work2` are not.
+    """
+    return (tag or "").strip().lower()
+
+
+def parse_tags(raw: Optional[str]) -> list[str]:
+    """Split a note's comma-separated `tags` column into canonical tags."""
+    return [t for t in (normalize_tag(p) for p in (raw or "").split(",")) if t]
+
+
+def filter_by_tag(rows, tag: Optional[str]) -> list:
+    """Keep rows carrying `tag` (any one of their tags). An empty/blank tag
+    means "no filter" and returns every row unchanged."""
+    wanted = normalize_tag(tag)
+    if not wanted:
+        return list(rows)
+    return [r for r in rows if wanted in parse_tags(r["tags"])]
+
+
+def list_tags() -> list[str]:
+    """All distinct canonical tags in use, sorted."""
+    with cursor() as cur:
+        cur.execute("SELECT tags FROM notes")
+        found = {t for r in cur.fetchall() for t in parse_tags(r["tags"])}
+    return sorted(found)
+
+
 def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
     with cursor() as cur:
         cur.execute("SELECT * FROM users WHERE api_token = ?", (token,))

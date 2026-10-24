@@ -97,6 +97,95 @@ def test_summarize_blocks_injection_in_secure_build():
     assert "INJECTION-OK-7f3a" not in r.json()["summary"]
 
 
+def _add_note(owner_id, title, tags):
+    from app import db
+
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO notes (owner_id, title, body, tags) VALUES (?, ?, ?, ?)",
+            (owner_id, title, "body", tags),
+        )
+
+
+def _titles(resp):
+    return sorted(n["title"] for n in resp.json()["notes"])
+
+
+def test_list_notes_tag_filter_match():
+    c = make_client(secure=True)
+    r = c.get("/notes", params={"tag": "work"}, headers=ALICE)
+    assert r.status_code == 200
+    assert _titles(r) == ["Alice standup"]
+
+
+def test_list_notes_no_filter_returns_all_own_notes():
+    c = make_client(secure=True)
+    r = c.get("/notes", headers=ALICE)
+    assert r.status_code == 200
+    assert _titles(r) == ["Alice groceries", "Alice standup"]
+    # A blank tag is the same as no filter.
+    r = c.get("/notes", params={"tag": ""}, headers=ALICE)
+    assert _titles(r) == ["Alice groceries", "Alice standup"]
+
+
+def test_list_notes_unknown_tag_returns_empty_list():
+    c = make_client(secure=True)
+    r = c.get("/notes", params={"tag": "nonexistent"}, headers=ALICE)
+    assert r.status_code == 200
+    assert r.json() == {"notes": []}
+
+
+def test_list_notes_tag_match_is_exact_and_case_insensitive():
+    c = make_client(secure=True)
+    assert _titles(c.get("/notes", params={"tag": "Work"}, headers=ALICE)) == ["Alice standup"]
+    assert _titles(c.get("/notes", params={"tag": " WORK "}, headers=ALICE)) == ["Alice standup"]
+    # Exact: a prefix or substring of a tag is not a match.
+    assert c.get("/notes", params={"tag": "wor"}, headers=ALICE).json() == {"notes": []}
+    assert c.get("/notes", params={"tag": "work,personal"}, headers=ALICE).json() == {"notes": []}
+
+
+def test_list_notes_multi_tag_note_matches_any_of_its_tags():
+    c = make_client(secure=True)
+    _add_note(1, "Alice multi", "Work, urgent,Home")
+    for tag in ("work", "urgent", "home"):
+        r = c.get("/notes", params={"tag": tag}, headers=ALICE)
+        assert "Alice multi" in _titles(r), tag
+    # ...but not when filtering by a tag it does not carry.
+    r = c.get("/notes", params={"tag": "personal"}, headers=ALICE)
+    assert "Alice multi" not in _titles(r)
+
+
+def test_list_notes_requires_auth_and_only_lists_own_notes():
+    c = make_client(secure=True)
+    assert c.get("/notes").status_code == 401
+    r = c.get("/notes", params={"tag": "work"}, headers=BOB)
+    assert _titles(r) == ["Bob roadmap"]
+
+
+def test_search_tag_filter_and_clear_link():
+    c = make_client(secure=True)
+    r = c.get("/search", params={"q": "", "tag": "ops"})
+    assert "Carol admin memo" in r.text
+    assert "Alice standup" not in r.text
+    assert "clear filter" in r.text
+    r = c.get("/search", params={"q": ""})
+    assert "Alice standup" in r.text and "Carol admin memo" in r.text
+    assert "clear filter" not in r.text
+
+
+def test_search_tag_filter_escapes_tag_in_secure_build():
+    c = make_client(secure=True)
+    r = c.get("/search", params={"tag": "<script>x</script>"})
+    assert "<script>x</script>" not in r.text
+
+
+def test_index_offers_tag_picker():
+    c = make_client(secure=True)
+    r = c.get("/")
+    assert "/search?tag=work" in r.text
+    assert "/search?tag=ops" in r.text
+
+
 def test_tag_search_feature():
     """The demo feature issue is 'add note tagging'; tags are searchable."""
     c = make_client(secure=True)
