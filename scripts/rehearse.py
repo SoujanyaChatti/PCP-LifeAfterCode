@@ -279,9 +279,15 @@ def main(argv=None) -> int:
     from dashboard.build import main as build_dashboard
     from verifier.ledger import load, summarize
 
+    labels = {"happy": "Happy path", "security-round1": "Security · round 1",
+              "security-round2": "Security · round 2", "lie": "Caught lie"}
+    replays = [f"{label}={os.path.join(out, f'evidence-pack.{name}.json')}"
+               for name, label in labels.items()
+               if os.path.exists(os.path.join(out, f"evidence-pack.{name}.json"))]
     with contextlib.redirect_stdout(io.StringIO()):
         build_dashboard(["--ledger", os.path.join(out, "ledger.json"), "--pack", latest,
-                         "--out", os.path.join(out, "public")])
+                         "--out", os.path.join(out, "public")]
+                        + [a for r in replays for a in ("--replay-pack", r)])
     trust = summarize(load(os.path.join(out, "ledger.json")))
     _banner("Trust ledger after this rehearsal")
     for agent, a in sorted(trust["agents"].items()):

@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 
+from dashboard.replay import render as render_replay
 from verifier.ledger import load, summarize
 
 TIER = {"autonomous": ("ok", "autonomous"), "probation": ("warn", "probation"),
@@ -41,6 +42,8 @@ tr:last-child td{border-bottom:0}code{font-family:var(--mono);font-size:12.5px}
 .warn{color:var(--warn);background:var(--warn-bg)}
 .lie{border-left:3px solid var(--bad);padding:8px 12px;margin:8px 0;background:var(--card)}
 footer{color:var(--muted);font-size:13px;margin-top:40px}
+.cta{display:inline-block;background:var(--fg);color:var(--bg);text-decoration:none;font-weight:650;
+padding:8px 16px;border-radius:8px}
 """
 
 
@@ -70,6 +73,7 @@ def render(ledger: dict, pack: dict | None) -> str:
            "<h1>Polygraph</h1>",
            "<p class=sub>Every promotion carries its own proof. This page is generated from the "
            "hash-chained trust ledger and the signed evidence packs — no agent text.</p>",
+           "<p><a class=cta href=replay.html>▶ Watch the latest run replay</a></p>" if pack else "",
            "<div class=grid>",
            f"<div class=card><div class=big>{len(entries)}</div><div class=label>pipeline runs judged</div></div>",
            f"<div class=card><div class=big>{judged}</div><div class=label>agent claims verified against evidence</div></div>",
@@ -148,6 +152,8 @@ def main(argv=None) -> int:
     p.add_argument("--ledger", default="ledger.json")
     p.add_argument("--pack", default=None)
     p.add_argument("--out", default="public")
+    p.add_argument("--replay-pack", action="append", default=[], metavar="LABEL=PATH",
+                   help="extra packs to offer in replay.html (default: just --pack)")
     args = p.parse_args(argv)
 
     ledger = load(args.ledger)
@@ -158,6 +164,17 @@ def main(argv=None) -> int:
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "index.html"), "w") as f:
         f.write(render(ledger, pack))
+
+    replays: list[tuple[str | None, dict]] = []
+    for spec in args.replay_pack:
+        label, _, path = spec.partition("=")
+        with open(path) as f:
+            replays.append((label or None, json.load(f)))
+    if not replays and pack:
+        replays = [(None, pack)]
+    if replays:
+        with open(os.path.join(args.out, "replay.html"), "w") as f:
+            f.write(render_replay(replays))
     with open(os.path.join(args.out, "ledger.json"), "w") as f:
         json.dump(ledger, f, indent=2)
     if pack:
