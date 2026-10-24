@@ -160,6 +160,8 @@ test:
   extends: [.py, .pipeline]
   stage: test
   script:
+    # tests/test_integrity.py drives real git; the slim image ships without it.
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
     - EXTRA=""; if [ "$PCP_DEMO" = "lie" ]; then EXTRA="scripts/_demo_failing_test.py"; fi
     - python -m pytest tests $EXTRA --junitxml=report.xml
         --cov=app --cov=verifier --cov=redteam --cov=evidence_pack
