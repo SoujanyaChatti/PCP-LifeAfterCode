@@ -20,14 +20,13 @@ The issue is assigned to (or mentions) this flow's service account; the PCP Deli
 ## Claim note (`plan.ready`)
 The note body must be exactly this shape (the pipeline parses it):
 
-    <!-- pcp-claim -->
     **Claim `plan.ready`** by `planner`
-    ```json
-    {"claim_id": "<a new unique id>", "type": "plan.ready", "agent": "planner", "stage": "plan",
-     "subject": {"project_id": <project id>, "issue_iid": <issue iid>, "commit_sha": ""},
-     "statement": "Acceptance criteria written; risk assessed as <level>.",
-     "asserted": {"risk": "<level>", "affected_files": ["app/..."]},
-     "created_at": "<ISO-8601 UTC timestamp>"}
+    ```pcp-claim
+    {"claim_id": "[a new unique id]", "type": "plan.ready", "agent": "planner", "stage": "plan",
+     "subject": {"project_id": [project id], "issue_iid": [issue iid], "commit_sha": ""},
+     "statement": "Acceptance criteria written; risk assessed as [level].",
+     "asserted": {"risk": "[level]", "affected_files": ["app/..."]},
+     "created_at": "[ISO-8601 UTC timestamp]"}
     ```
 
 ## Hard rule

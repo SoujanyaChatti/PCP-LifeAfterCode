@@ -4,6 +4,7 @@ current and valid against GitLab's flow schema."""
 import json
 import os
 import re
+import unicodedata
 
 import yaml
 
@@ -88,4 +89,8 @@ def test_duo_catalog_is_current_and_schema_valid():
         jsonschema.validate(item["definition"], schema)
         # Jinja-sensitive sequences in system prompts would break templating.
         for prompt in item["definition"]["prompts"]:
-            assert not re.search(r"\{\{|\{%|\{#", prompt["prompt_template"]["system"])
+            system = prompt["prompt_template"]["system"]
+            assert not re.search(r"\{\{|\{%|\{#", system)
+            # GitLab rejects developer prompts with HTML comments, tags or hidden unicode.
+            assert not re.search(r"<!--|<[A-Za-z/][^>]*>|\[//\]: #|\[comment\]: <>", system), prompt["prompt_id"]
+            assert not any(unicodedata.category(c) == "Cf" for c in system), prompt["prompt_id"]

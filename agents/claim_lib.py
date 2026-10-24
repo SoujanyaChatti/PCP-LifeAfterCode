@@ -1,7 +1,7 @@
 """Shared helper every agent uses to emit its structured claim.
 
 An agent's only trusted output is a claim written here: a JSON file under
-claims/ (a CI artifact) plus an MR note carrying a fixed marker. Free-text the
+claims/ (a CI artifact) plus an MR note carrying a fenced pcp-claim block. Free-text the
 agent writes elsewhere is never used for gating. This keeps the agent/verifier
 boundary clean: agents assert, the verifier judges.
 """
@@ -13,7 +13,9 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-CLAIM_MARKER = "<!-- pcp-claim -->"
+# Claims travel in a fenced block labelled pcp-claim. (Not an HTML comment:
+# GitLab rejects Duo prompts that contain those.)
+CLAIM_FENCE = "pcp-claim"
 
 
 def _claims_dir() -> str:
@@ -53,25 +55,22 @@ def claim_note_body(claim: dict) -> str:
     """Render the MR note body for a claim, with the marker the pipeline greps.
     The full claim is embedded so the pipeline can read it back verbatim."""
     return (
-        f"{CLAIM_MARKER}\n"
         f"**Claim `{claim['type']}`** by `{claim['agent']}`\n\n"
         f"> {claim['statement']}\n\n"
-        f"```json\n{json.dumps(claim, indent=2)}\n```\n"
+        f"```{CLAIM_FENCE}\n{json.dumps(claim, indent=2)}\n```\n"
     )
 
 
-_JSON_BLOCK = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+_CLAIM_BLOCK = re.compile(r"```" + CLAIM_FENCE + r"[ \t]*\n(\{.*?\})\s*```", re.S)
 
 
 def parse_claim_notes(notes: list[dict]) -> list[dict]:
-    """Extract claims from MR notes carrying the marker, oldest first. Notes
-    without the marker, or whose JSON is not a full claim, are ignored."""
+    """Extract claims from MR notes with a pcp-claim block, oldest first. Notes
+    without one, or whose JSON is not a full claim, are ignored."""
     claims = []
     for note in sorted(notes, key=lambda n: n.get("created_at", "")):
         body = note.get("body", "")
-        if CLAIM_MARKER not in body:
-            continue
-        m = _JSON_BLOCK.search(body)
+        m = _CLAIM_BLOCK.search(body)
         if not m:
             continue
         try:
