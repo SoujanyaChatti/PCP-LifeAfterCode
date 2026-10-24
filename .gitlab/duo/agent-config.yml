@@ -1,7 +1,7 @@
 # Execution environment for the PCP Duo flows (read from the default branch).
 # The Builder / Blue Team / Pipeline Fixer run the test suite inside it, so it
-# matches the CI test image.
-image: python:3.12-slim
+# matches the CI test image. Full (not -slim) because Duo runs git before setup_script.
+image: python:3.12
 setup_script:
   - pip install --quiet -r requirements-dev.txt
 cache:
