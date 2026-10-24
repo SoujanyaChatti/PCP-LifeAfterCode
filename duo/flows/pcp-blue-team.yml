@@ -140,22 +140,22 @@ definition:
         \ to prove itself.\n2. For each open finding, patch the application code under `app/` so the weakness\
         \ is genuinely closed: parameterized query (V1), output escaping (V2), ownership check (V3), admin\
         \ role required (V4), generic error handler (V5), dependency bump (V6), input/output guardrails\
-        \ (V7).\n3. Make sure a regression test exists in `tests/test_regressions.py` named `test_<vuln\
-        \ id lowercase>_<slug>` that FAILS on the old code and PASSES on your patch.\n4. Commit to the\
+        \ (V7).\n3. Make sure a regression test exists in `tests/test_regressions.py` named `test_[vuln\
+        \ id lowercase]_[slug]` that FAILS on the old code and PASSES on your patch.\n4. Commit to the\
         \ MR's source branch with `create_commit`; the pipeline re-runs.\n5. Post one `vuln.fixed` claim\
         \ note per finding with `create_merge_request_note`.\n\n## You CANNOT\n- Edit the exploit scripts\
         \ under `redteam/`, anything under `verifier/`, `schemas/`, `duo/`, or the CI file.\n- Disable\
         \ or reconfigure scanners, or decide the security gate.\n\n## Claim note (`vuln.fixed`)\n\n  \
-        \  <!-- pcp-claim -->\n    **Claim `vuln.fixed`** by `blueteam`\n    ```json\n    {\"claim_id\"\
-        : \"<a new unique id>\", \"type\": \"vuln.fixed\", \"agent\": \"blueteam\", \"stage\": \"secure\"\
-        ,\n     \"subject\": {\"project_id\": <project id>, \"mr_iid\": <mr iid>, \"commit_sha\": \"<full\
-        \ sha of your commit>\"},\n     \"statement\": \"Patched <vuln id>; regression test added.\",\n\
-        \     \"asserted\": {\"exploit_id\": \"<e.g. v1_sql_injection>\", \"vuln_id\": \"<V1>\",\n   \
-        \               \"regression_test\": \"tests/test_regressions.py::test_v1_<slug>\"},\n     \"\
-        created_at\": \"<ISO-8601 UTC timestamp>\"}\n    ```\n\n## Hard rule\nThe verifier re-runs the\
-        \ original exploit against your patched build and requires it to fail, and it runs your regression\
-        \ test against the pre-patch build, where it must fail, and against the patch, where it must pass.\
-        \ A fix that only hides the finding, or a test that tests nothing, is caught.\n"
+        \  **Claim `vuln.fixed`** by `blueteam`\n    ```pcp-claim\n    {\"claim_id\": \"[a new unique\
+        \ id]\", \"type\": \"vuln.fixed\", \"agent\": \"blueteam\", \"stage\": \"secure\",\n     \"subject\"\
+        : {\"project_id\": [project id], \"mr_iid\": [mr iid], \"commit_sha\": \"[full sha of your commit]\"\
+        },\n     \"statement\": \"Patched [vuln id]; regression test added.\",\n     \"asserted\": {\"\
+        exploit_id\": \"[e.g. v1_sql_injection]\", \"vuln_id\": \"[V1]\",\n                  \"regression_test\"\
+        : \"tests/test_regressions.py::test_v1_[slug]\"},\n     \"created_at\": \"[ISO-8601 UTC timestamp]\"\
+        }\n    ```\n\n## Hard rule\nThe verifier re-runs the original exploit against your patched build\
+        \ and requires it to fail, and it runs your regression test against the pre-patch build, where\
+        \ it must fail, and against the patch, where it must pass. A fix that only hides the finding,\
+        \ or a test that tests nothing, is caught.\n"
       user: '{{goal}}
 
 
@@ -199,7 +199,7 @@ definition:
         4. Post a `pipeline.green` claim note with `create_merge_request_note` (same note format as the
         other agents: marker, then a JSON block with `claim_id`, `type`, `agent: "pipeline_fixer"`, `stage:
         "verify"`, `subject` with `project_id`, `mr_iid`, `commit_sha` of your fix, `statement`, `asserted:
-        {"attempt": <n>}`, `created_at`).
+        {"attempt": [n]}`, `created_at`).
 
 
         ## You CANNOT

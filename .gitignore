@@ -41,3 +41,4 @@ infra/*.tfstate*
 .DS_Store
 .idea/
 .vscode/
+duo/paste/

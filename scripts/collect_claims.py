@@ -1,6 +1,6 @@
 """Gather the claims a gate will judge.
 
-Agents post claims as MR notes carrying the `<!-- pcp-claim -->` marker (see
+Agents post claims as MR notes carrying a ```pcp-claim fenced block (see
 agents/claim_lib.py). This reads them back from the GitLab API, keeps only the
 ones bound to the commit under test, and writes them to claims/. If no agent
 claim exists (a CI-only run with no Duo flow attached), it falls back to a

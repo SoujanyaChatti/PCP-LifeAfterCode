@@ -40,7 +40,8 @@ def test_claim_notes_round_trip(tmp_path, monkeypatch):
     notes = [{"id": 2, "body": claim_note_body(claim), "created_at": "2026-01-02",
               "author": {"username": "ai-pcp"}},
              {"id": 1, "body": "just chatting", "created_at": "2026-01-01"},
-             {"id": 3, "body": "<!-- pcp-claim -->\n```json\n{not json}\n```"}]
+             {"id": 3, "body": "```pcp-claim\n{not json}\n```"},
+             {"id": 4, "body": "```json\n" + json.dumps(claim) + "\n```"}]
     parsed = parse_claim_notes(notes)
     assert len(parsed) == 1
     assert parsed[0]["claim_id"] == claim["claim_id"]
