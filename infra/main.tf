@@ -1,4 +1,4 @@
-# Infrastructure as code for the Proof-Carrying Pipeline on Google Cloud.
+# Infrastructure as code for Polygraph on Google Cloud.
 # Covers: Artifact Registry, the production Cloud Run service, two service
 # accounts (a deployer, and a READ-ONLY verifier: no identity can both deploy
 # and verify), and Workload Identity Federation so GitLab CI authenticates by
@@ -21,7 +21,7 @@ variable "region" {
 }
 variable "gitlab_project_path" {
   type        = string
-  description = "e.g. your-group/pcp-lifeaftercode"
+  description = "e.g. SoujanyaChatti/polygraph"
 }
 
 provider "google" {

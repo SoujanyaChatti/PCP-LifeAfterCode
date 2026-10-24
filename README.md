@@ -1,4 +1,4 @@
-# Proof-Carrying Pipeline
+# Polygraph
 
 **Autonomous delivery that can't lie: every promotion carries its own proof.**
 

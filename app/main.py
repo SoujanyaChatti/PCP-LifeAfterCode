@@ -1,4 +1,4 @@
-"""Team-notes demo app for the Proof-Carrying Pipeline.
+"""Team-notes demo app for Polygraph.
 
 This app deliberately ships known weaknesses (V1-V7 in the PRD) so the in-CI
 security gate has real, synthetic targets to exercise. Each weakness is gated

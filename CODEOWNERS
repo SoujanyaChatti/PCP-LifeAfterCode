@@ -8,27 +8,27 @@
 # "can't lie" trust model. verifier/fingerprint.py hashes the same paths into
 # every evidence pack.
 #
-# Replace @owner with the real GitLab username before going public.
+# Owner: @SoujanyaChatti (gitlab.com/SoujanyaChatti/polygraph).
 
 # Judges: checks, catalogue, ledger, canary, exploit playbook + replay
-/verifier/            @owner
-/redteam/             @owner
-/schemas/             @owner
+/verifier/            @SoujanyaChatti
+/redteam/             @SoujanyaChatti
+/schemas/             @SoujanyaChatti
 
 # Gate wiring and evidence production
-/.gitlab-ci.yml       @owner
-/ci/                  @owner
-/scripts/             @owner
-/evidence_pack/       @owner
-/infra/               @owner
+/.gitlab-ci.yml       @SoujanyaChatti
+/ci/                  @SoujanyaChatti
+/scripts/             @SoujanyaChatti
+/evidence_pack/       @SoujanyaChatti
+/infra/               @SoujanyaChatti
 
 # Test harness: conftest hooks could rewrite outcomes in the JUnit report
-/pytest.ini           @owner
-/tests/conftest.py    @owner
+/pytest.ini           @SoujanyaChatti
+/tests/conftest.py    @SoujanyaChatti
 
 # Agents' instructions and the Duo flows built from them
-/agents/              @owner
-/duo/                 @owner
-/.gitlab/duo/         @owner
+/agents/              @SoujanyaChatti
+/duo/                 @SoujanyaChatti
+/.gitlab/duo/         @SoujanyaChatti
 
-/CODEOWNERS           @owner
+/CODEOWNERS           @SoujanyaChatti

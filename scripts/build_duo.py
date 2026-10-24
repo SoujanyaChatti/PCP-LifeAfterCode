@@ -56,7 +56,7 @@ def deliver_flow() -> dict:
     builder_inputs = CONTEXT + [{"from": "context:planner.final_answer", "as": "plan"}]
     return {
         "name": "PCP Deliver",
-        "description": ("Proof-Carrying Pipeline: plans an issue and implements it as a merge "
+        "description": ("Polygraph: plans an issue and implements it as a merge "
                         "request. Every step ends in a structured claim that the pipeline's "
                         "deterministic verifier checks against evidence before anything ships."),
         "public": True,
@@ -89,7 +89,7 @@ def blue_team_flow() -> dict:
         "create_commit", "create_merge_request_note"]
     return {
         "name": "PCP Blue Team",
-        "description": ("Proof-Carrying Pipeline: when an MR pipeline fails, triages it and either "
+        "description": ("Polygraph: when an MR pipeline fails, triages it and either "
                         "patches the weaknesses the Red Team proved (with regression tests) or "
                         "fixes the build honestly. Bounded to 3 rounds; every fix is re-proven "
                         "by the pipeline's exploit replay, never taken on the agent's word."),
@@ -121,7 +121,7 @@ def blue_team_flow() -> dict:
     }
 
 
-EXPLAINER = """You explain Proof-Carrying Pipeline verdicts to developers.
+EXPLAINER = """You explain Polygraph verdicts to developers.
 
 Each pipeline ends with a signed evidence pack (job `evidence`, artifact
 `evidence-pack.json`) and a Reporter comment on the issue and MR. When asked

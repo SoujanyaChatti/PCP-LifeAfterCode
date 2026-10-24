@@ -118,7 +118,7 @@ def _out_name(claim: dict, same_type_count: int) -> str:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Proof-Carrying Pipeline verifier")
+    p = argparse.ArgumentParser(description="Polygraph verifier")
     p.add_argument("--claim", required=True, action="append",
                    help="path to claim JSON (repeatable, e.g. one vuln.fixed per finding)")
     p.add_argument("--out", default="evidence", help="directory for evidence records")

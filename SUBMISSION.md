@@ -1,4 +1,4 @@
-# Submission — Proof-Carrying Pipeline
+# Submission — Polygraph
 
 For [Life After Code](https://gitlab-transcend.devpost.com/). Path A (Start
 Fresh) · Hands-off autonomy · opt into **Most Creative**.
@@ -13,7 +13,7 @@ Hands-off agents are the goal of agentic DevSecOps, but teams won't give agents
 production access because agent summaries are unverifiable: an agent can write
 "all tests pass, security issue resolved" whether or not it's true.
 
-Proof-Carrying Pipeline lets GitLab Duo agents do the work (plan, build, patch)
+Polygraph lets GitLab Duo agents do the work (plan, build, patch)
 while a deterministic verifier checks every claim they make against evidence
 they cannot write to: the JUnit report, the container registry, the Cloud Run
 API, Cloud Monitoring, and a pinned exploit replay. A claim the evidence
@@ -80,7 +80,7 @@ Offline capture of any beat: `python -m scripts.rehearse --scenario security|lie
 
 ## Submission checklist
 - [ ] Public GitLab project, MIT License shown in About.
-- [ ] Protected `main` + code-owner approval; `@owner` replaced in CODEOWNERS.
+- [ ] Protected `main` + code-owner approval (CODEOWNERS names `@SoujanyaChatti`).
 - [ ] Visible CI/CD history (`scripts/seed_pipelines.py --plan default`): promoted, lie-blocked, security-blocked, probation-held.
 - [ ] Duo flows published (tag) and enabled with triggers; one hands-off run from an assigned issue.
 - [ ] Live Google Cloud URL + deployment code in repo (`infra/`).

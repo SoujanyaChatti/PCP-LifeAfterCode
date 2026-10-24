@@ -51,7 +51,7 @@ class GitLab:
 
 
 def followup_body(pack: dict, issue_iid: int | None) -> str:
-    lines = [f"The Proof-Carrying Pipeline **blocked** pipeline "
+    lines = [f"Polygraph **blocked** pipeline "
              f"{os.environ.get('CI_PIPELINE_URL', '')}"]
     if issue_iid:
         lines.append(f"for #{issue_iid}")

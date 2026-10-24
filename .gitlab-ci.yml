@@ -1,4 +1,4 @@
-# Proof-Carrying Pipeline — the gated spine.
+# Polygraph — the gated spine.
 #
 # Pattern per gated stage: a WORK job produces an artifact and a claim; a
 # verify:<x> job reads the claim plus AUTHORITATIVE evidence (GitLab API,

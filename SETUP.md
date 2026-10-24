@@ -21,13 +21,13 @@ open rehearsal/public/index.html                    # the dashboard, from the lo
 ```
 
 ## 1. GitLab project
-1. Create a **public** project (e.g. `pcp-lifeaftercode`) in a group, and push:
+1. Create a **public** project (`polygraph`, at gitlab.com/SoujanyaChatti/polygraph), and push:
    ```bash
-   git remote add gitlab https://gitlab.com/<group>/pcp-lifeaftercode.git
+   git remote add gitlab https://gitlab.com/SoujanyaChatti/polygraph.git
    git push gitlab main
    ```
 2. **Settings → General**: confirm the MIT license shows in the About panel.
-3. In [`CODEOWNERS`](CODEOWNERS), replace `@owner` with your GitLab username; commit.
+3. [`CODEOWNERS`](CODEOWNERS) already names `@SoujanyaChatti`; change it if the owner differs.
 4. **Settings → Repository → Protected branches**: protect `main`, *Allowed to
    push: No one*, and turn on **Code owner approval**. This is the trust
    boundary: no agent can change the verifier, playbook, gate wiring or its own
@@ -55,7 +55,7 @@ history; that's intended (see step 6).
 ```bash
 cd infra
 terraform init
-terraform apply -var project_id=<GCP_PROJECT_ID> -var gitlab_project_path=<group>/pcp-lifeaftercode
+terraform apply -var project_id=<GCP_PROJECT_ID> -var gitlab_project_path=SoujanyaChatti/polygraph
 terraform output gitlab_ci_variables
 ```
 This creates Artifact Registry (`pcp`), the production Cloud Run service, three
@@ -111,13 +111,13 @@ A group Owner must allow external MCP tools (Settings → GitLab Duo).
 ## 6. Seed pipeline history
 ```bash
 export GITLAB_TOKEN=glpat-...   # your PAT, api scope
-python scripts/seed_pipelines.py --project <group>/pcp-lifeaftercode --plan default --wait
+python scripts/seed_pipelines.py --project SoujanyaChatti/polygraph --plan default --wait
 ```
 20 runs on `main`: 2 human-approved bootstrap runs (new agents start on
 probation), 3 caught lies, 3 incomplete patches (V1, V3, V7), then honest runs.
 After a caught lie the agent is on probation, so the next few honest runs are
 held at `policy:autonomy` until it re-earns trust — that's the feature, and the
-dashboard (`https://<group>.gitlab.io/pcp-lifeaftercode`) shows it.
+dashboard (`https://soujanyachatti.gitlab.io/polygraph`) shows it.
 
 ## Demo knobs (CI/CD → Run pipeline → variables)
 | Variable | Effect |

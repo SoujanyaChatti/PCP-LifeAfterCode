@@ -66,8 +66,8 @@ def render(ledger: dict, pack: dict | None) -> str:
 
     out = [f"<!doctype html><html lang=en><head><meta charset=utf-8>"
            f"<meta name=viewport content='width=device-width,initial-scale=1'>"
-           f"<title>Proof-Carrying Pipeline</title><style>{CSS}</style></head><body><main>",
-           "<h1>Proof-Carrying Pipeline</h1>",
+           f"<title>Polygraph</title><style>{CSS}</style></head><body><main>",
+           "<h1>Polygraph</h1>",
            "<p class=sub>Every promotion carries its own proof. This page is generated from the "
            "hash-chained trust ledger and the signed evidence packs — no agent text.</p>",
            "<div class=grid>",

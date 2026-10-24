@@ -118,7 +118,7 @@ def render(pack: dict, pack_url: str = "", verify_job_url: str = "",
            followup_url: str = "", trust: dict | None = None) -> str:
     decision = pack.get("decision", "UNKNOWN")
     banner = f"{CHECK} PROMOTED" if decision == "PROMOTED" else f"{CROSS} BLOCKED"
-    lines = [f"## Proof-Carrying Pipeline — {banner}", ""]
+    lines = [f"## Polygraph — {banner}", ""]
     run = pack.get("run", {})
     if run:
         lines += [f"Issue #{run.get('issue_iid') or '?'} · MR !{run.get('mr_iid') or '?'} · "

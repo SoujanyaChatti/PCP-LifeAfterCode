@@ -6,7 +6,7 @@ default branch through the GitLab API, each with the demo knobs documented in
 genuine PROMOTED and BLOCKED outcomes, and the trust ledger / dashboard fill in.
 
     export GITLAB_TOKEN=glpat-...            # api scope, Maintainer
-    python scripts/seed_pipelines.py --project group/pcp-lifeaftercode --plan default --wait
+    python scripts/seed_pipelines.py --project SoujanyaChatti/polygraph --plan default --wait
 
 Plans:
   default  2x human-approved bootstrap (agents start on probation), 3x lie,
