@@ -1,12 +1,12 @@
 """Seed visible pipeline history: honest runs, caught lies, incomplete patches.
 
 Creates (or reuses) a planned demo issue, then triggers pipelines on the
-default branch through the GitLab API, each with the demo knobs documented in
-.gitlab-ci.yml. Every run is judged by the real gates, so the history shows
+default branch through the GitLab API, each with the demo inputs declared at the
+top of .gitlab-ci.yml. Every run is judged by the real gates, so the history shows
 genuine PROMOTED and BLOCKED outcomes, and the trust ledger / dashboard fill in.
 
-    export GITLAB_TOKEN=glpat-...            # api scope, Maintainer
-    python scripts/seed_pipelines.py --project SoujanyaChatti/polygraph --plan default --wait
+    export GITLAB_TOKEN=glpat-...            # api scope
+    python scripts/seed_pipelines.py --project gitlab-ai-hackathon/transcend-october-2026/39453199/showcase --plan default --wait
 
 Plans:
   default  2x human-approved bootstrap (agents start on probation), 3x lie,
@@ -31,15 +31,17 @@ ISSUE_BODY = """Add tags to notes so the team can filter search results by tag.
 - [ ] Search input is never interpreted as SQL and never echoed unescaped.
 """
 
+# Pipeline inputs (spec at the top of .gitlab-ci.yml). Inputs, not variables:
+# the hackathon workspace doesn't let Developers pass variables to pipelines.
 PLANS = {
-    "quick": [("honest", {"PCP_HUMAN_APPROVED": "1"}),
-              ("lie", {"PCP_DEMO": "lie"}),
-              ("incomplete patch V1", {"PCP_UNPATCHED": "V1"})],
+    "quick": [("honest", {"human_approved": "1"}),
+              ("lie", {"demo": "lie"}),
+              ("incomplete patch V1", {"unpatched": "V1"})],
 }
 PLANS["default"] = (
-    [("bootstrap (human-approved)", {"PCP_HUMAN_APPROVED": "1"})] * 2
-    + [("lie", {"PCP_DEMO": "lie"})] * 3
-    + [(f"incomplete patch {v}", {"PCP_UNPATCHED": v}) for v in ("V1", "V3", "V7")]
+    [("bootstrap (human-approved)", {"human_approved": "1"})] * 2
+    + [("lie", {"demo": "lie"})] * 3
+    + [(f"incomplete patch {v}", {"unpatched": v}) for v in ("V1", "V3", "V7")]
     + [("honest", {})] * 12
 )
 
@@ -90,9 +92,8 @@ def main(argv=None) -> int:
     iid = demo_issue(gl)
 
     for i, (label, extra) in enumerate(PLANS[args.plan], 1):
-        variables = [{"key": "ISSUE_IID", "value": str(iid)}]
-        variables += [{"key": k, "value": v} for k, v in extra.items()]
-        pl = gl.req("POST", "/pipeline", json={"ref": args.ref, "variables": variables})
+        inputs = {"issue_iid": str(iid), **extra}
+        pl = gl.req("POST", "/pipeline", json={"ref": args.ref, "inputs": inputs})
         line = f"[{i:2}] {label:28} pipeline {pl['id']}  {pl['web_url']}"
         if args.wait:
             line += f"  -> {wait(gl, pl['id'])}"
