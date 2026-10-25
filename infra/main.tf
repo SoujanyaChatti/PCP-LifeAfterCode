@@ -78,11 +78,13 @@ locals {
   roles = {
     deployer_run     = ["deployer", "roles/run.admin"]
     deployer_sa_user = ["deployer", "roles/iam.serviceAccountUser"]
-    staging_run      = ["staging", "roles/run.admin"]
-    staging_sa_user  = ["staging", "roles/iam.serviceAccountUser"]
-    staging_ar       = ["staging", "roles/artifactregistry.writer"]
-    verifier_run     = ["verifier", "roles/run.viewer"]
-    verifier_mon     = ["verifier", "roles/monitoring.viewer"]
+    # Promote = deploy an image that staging already pushed; read-only is enough.
+    deployer_ar     = ["deployer", "roles/artifactregistry.reader"]
+    staging_run     = ["staging", "roles/run.admin"]
+    staging_sa_user = ["staging", "roles/iam.serviceAccountUser"]
+    staging_ar      = ["staging", "roles/artifactregistry.writer"]
+    verifier_run    = ["verifier", "roles/run.viewer"]
+    verifier_mon    = ["verifier", "roles/monitoring.viewer"]
   }
   sa_email = {
     deployer = google_service_account.deployer.email
@@ -183,7 +185,7 @@ output "staging_sa" { value = google_service_account.staging.email }
 
 output "gitlab_ci_variables" {
   description = "Paste into GitLab > Settings > CI/CD > Variables"
-  value = <<-EOT
+  value       = <<-EOT
     GCP_PROJECT=${var.project_id}
     GCP_REGION=${var.region}
     GCP_WIF_PROVIDER=${google_iam_workload_identity_pool_provider.gitlab.name}
