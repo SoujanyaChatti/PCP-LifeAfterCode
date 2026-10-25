@@ -20,9 +20,13 @@ class _GitLabLoader(yaml.SafeLoader):
 _GitLabLoader.add_constructor("!reference", lambda loader, node: loader.construct_sequence(node))
 
 
-def _ci():
+def _docs():
     with open(os.path.join(ROOT, ".gitlab-ci.yml")) as f:
-        return yaml.load(f, Loader=_GitLabLoader)
+        return list(yaml.load_all(f, Loader=_GitLabLoader))
+
+
+def _ci():
+    return _docs()[-1]   # the first document is the inputs spec
 
 
 RESERVED = {"stages", "variables", "workflow", "include", "default"}
@@ -94,3 +98,19 @@ def test_duo_catalog_is_current_and_schema_valid():
             # GitLab rejects developer prompts with HTML comments, tags or hidden unicode.
             assert not re.search(r"<!--|<[A-Za-z/][^>]*>|\[//\]: #|\[comment\]: <>", system), prompt["prompt_id"]
             assert not any(unicodedata.category(c) == "Cf" for c in system), prompt["prompt_id"]
+
+
+def test_demo_knobs_are_inputs_that_feed_the_variables_jobs_read():
+    """Developers can't pass variables to manual pipelines in the hackathon
+    workspace, so every demo knob must be a pipeline input with a no-op default."""
+    spec, ci = _docs()
+    inputs = spec["spec"]["inputs"]
+    wiring = {"demo": "PCP_DEMO", "unpatched": "PCP_UNPATCHED",
+              "human_approved": "PCP_HUMAN_APPROVED", "issue_iid": "ISSUE_IID"}
+    for name, var in wiring.items():
+        assert ci["variables"][var] == f"$[[ inputs.{name} ]]"
+        assert "default" in inputs[name]
+    # The defaults must not switch anything on.
+    assert inputs["demo"]["default"] != "lie"
+    assert inputs["unpatched"]["default"] == "" and inputs["issue_iid"]["default"] == ""
+    assert inputs["human_approved"]["default"] != "1"

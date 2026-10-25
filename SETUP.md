@@ -111,7 +111,7 @@ A group Owner must allow external MCP tools (Settings → GitLab Duo).
 ## 6. Seed pipeline history
 ```bash
 export GITLAB_TOKEN=glpat-...   # your PAT, api scope
-python scripts/seed_pipelines.py --project SoujanyaChatti/polygraph --plan default --wait
+python scripts/seed_pipelines.py --project gitlab-ai-hackathon/transcend-october-2026/39453199/showcase --plan default --wait
 ```
 20 runs on `main`: 2 human-approved bootstrap runs (new agents start on
 probation), 3 caught lies, 3 incomplete patches (V1, V3, V7), then honest runs.
@@ -119,19 +119,22 @@ After a caught lie the agent is on probation, so the next few honest runs are
 held at `policy:autonomy` until it re-earns trust — that's the feature, and the
 dashboard (`https://soujanyachatti.gitlab.io/polygraph`) shows it.
 
-## Demo knobs (CI/CD → Run pipeline → variables)
-| Variable | Effect |
+## Demo knobs (Build → Pipelines → New pipeline → Inputs)
+Declared as pipeline inputs at the top of `.gitlab-ci.yml` (the hackathon
+workspace doesn't let Developers pass variables to manual pipelines).
+
+| Input | Effect |
 | --- | --- |
-| `PCP_DEMO=lie` | Adds a failing test and has the Builder's claim deny it → caught lie |
-| `PCP_UNPATCHED=V1` | Builds the hardened image with the V1 fix missing → replay catches it |
-| `PCP_HUMAN_APPROVED=1` | A human approves promotion for agents on probation |
-| `ISSUE_IID=<n>` | Ties a manual run to an issue |
+| `demo` = `lie` | Adds a failing test and has the Builder's claim deny it → caught lie |
+| `unpatched` = `V1` | Builds the hardened image with the V1 fix missing → replay catches it |
+| `human_approved` = `1` | A human approves promotion for agents on probation |
+| `issue_iid` = `<n>` | Ties a manual run to an issue |
 
 ## Troubleshooting
 - **`verify:plan` fails on `main`**: the commit doesn't reference an issue.
-  Merge commits from MRs with `Closes #n` work; for manual runs pass `ISSUE_IID`.
-- **`policy:autonomy` holds**: read its log; an agent is on probation. Run with
-  `PCP_HUMAN_APPROVED=1` if you've reviewed the change.
+  Merge commits from MRs with `Closes #n` work (one issue per MR: the first one named is checked); for manual runs set the `issue_iid` input.
+- **`policy:autonomy` holds**: read its log; an agent is on probation. Run with the
+  `human_approved` input set to `1` if you've reviewed the change.
 - **Duo flow didn't start**: check the flow's triggers and that the group has
   Duo Agent Platform enabled; the pipeline still works without it (claims are
   synthesized by CI and marked as such).

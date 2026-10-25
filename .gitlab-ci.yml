@@ -1,3 +1,24 @@
+# Demo knobs are pipeline INPUTS (Build > Pipelines > New pipeline): the
+# hackathon workspace does not let Developers pass CI/CD variables to a manual
+# pipeline, but inputs are always offered. Each input feeds the PCP_* variable
+# the jobs already read; the defaults change nothing.
+spec:
+  inputs:
+    demo:
+      description: "lie = the Builder's tests.pass claim denies a real test failure (caught-lie demo)"
+      options: ["none", "lie"]
+      default: "none"
+    unpatched:
+      description: "Leave these fixes out of the hardened build, e.g. V1 or V1,V3; the exploit replay must catch it"
+      default: ""
+    human_approved:
+      description: "1 = a human approves promotion for agents on probation"
+      options: ["0", "1"]
+      default: "0"
+    issue_iid:
+      description: "Tie a manual run to this issue (its plan is checked by verify:plan)"
+      default: ""
+---
 # Polygraph — the gated spine.
 #
 # Pattern per gated stage: a WORK job produces an artifact and a claim; a
@@ -17,10 +38,11 @@
 #   - with GCP_PROJECT set: ephemeral Cloud Run staging per MR, production on
 #     main, live deploy verification, scheduled drift watch.
 #
-# Demo knobs (Run pipeline > variables):
-#   PCP_DEMO=lie          the Builder's tests.pass claim lies about a real failure
-#   PCP_UNPATCHED=V1      the Blue Team's patch misses V1; replay must catch it
-#   PCP_HUMAN_APPROVED=1  a human approves promotion for agents on probation
+# Demo knobs (New pipeline > inputs; see spec at the top of this file):
+#   demo=lie              PCP_DEMO: the Builder's tests.pass claim lies about a real failure
+#   unpatched=V1          PCP_UNPATCHED: the Blue Team's patch misses V1; replay must catch it
+#   human_approved=1      PCP_HUMAN_APPROVED: a human approves promotion for agents on probation
+#   issue_iid=N           ISSUE_IID: tie a manual run to issue N
 
 workflow:
   rules:
@@ -62,6 +84,11 @@ variables:
   # Tags pushed by `package`; services and Cloud Run use the digests.
   IMAGE_REF: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
   TWIN_REF: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA-prepatch"
+  # Demo knobs, from the pipeline inputs above.
+  PCP_DEMO: "$[[ inputs.demo ]]"
+  PCP_UNPATCHED: "$[[ inputs.unpatched ]]"
+  PCP_HUMAN_APPROVED: "$[[ inputs.human_approved ]]"
+  ISSUE_IID: "$[[ inputs.issue_iid ]]"
 
 # --------------------------------------------------------------------------
 # Templates
