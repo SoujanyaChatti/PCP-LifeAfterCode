@@ -197,3 +197,25 @@ def test_collect_claims_fallback_for_findings(tmp_path, monkeypatch):
     assert names == ["vuln.fixed.V1.json", "vuln.fixed.V3.json"]
     v3 = json.loads((out / "vuln.fixed.V3.json").read_text())
     assert v3["asserted"]["regression_test"].endswith("::test_v3_idor_fixed")
+
+
+def test_plan_claim_is_read_from_the_linked_issue(monkeypatch):
+    """The Planner writes plan.ready on the issue before any commit exists, so it
+    is bound to the issue, not a SHA; claims for other issues are ignored."""
+    from scripts import collect_claims
+
+    def note(issue, cid):
+        return {"id": cid, "created_at": f"2026-10-24T0{cid}:00:00Z", "author": {"username": "ai"},
+                "body": claim_note_body({"claim_id": f"p{cid}", "type": "plan.ready", "agent": "planner",
+                                         "stage": "plan", "statement": "x", "asserted": {},
+                                         "subject": {"project_id": 1, "issue_iid": issue, "commit_sha": ""}})}
+
+    seen = []
+    monkeypatch.setattr(collect_claims, "_notes",
+                        lambda path, token: seen.append(path) or [note(6, 1), note(9, 2), note(6, 3)])
+    monkeypatch.setenv("CI_MERGE_REQUEST_IID", "5")
+    monkeypatch.setenv("VERIFIER_READONLY_TOKEN", "t")
+    monkeypatch.setenv("CI_MERGE_REQUEST_DESCRIPTION", "Closes #6")
+    claims = collect_claims.agent_claims("plan.ready")
+    assert seen == ["issues/6"]
+    assert [c["claim_id"] for c in claims] == ["p3"]   # latest plan for issue 6 only

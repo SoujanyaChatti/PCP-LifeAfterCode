@@ -39,22 +39,40 @@ def _subject(**extra) -> dict:
     return subject
 
 
-def agent_claims(claim_type: str) -> list[dict]:
-    """Claims of this type posted on the MR for the current commit."""
-    mr = os.environ.get("CI_MERGE_REQUEST_IID")
-    token = os.environ.get("VERIFIER_READONLY_TOKEN")
-    if not (mr and token):
-        return []
+def _notes(path: str, token: str) -> list[dict]:
     import httpx
 
     r = httpx.get(
         f"{os.environ.get('CI_API_V4_URL', 'https://gitlab.com/api/v4')}/projects/"
-        f"{os.environ['CI_PROJECT_ID']}/merge_requests/{mr}/notes",
+        f"{os.environ['CI_PROJECT_ID']}/{path}/notes",
         params={"per_page": 100, "sort": "asc"},
         headers={"PRIVATE-TOKEN": token}, timeout=15.0)
     r.raise_for_status()
+    return r.json()
+
+
+def agent_claims(claim_type: str) -> list[dict]:
+    """Claims of this type posted by agents for this MR.
+
+    Most claims are MR notes bound to the current commit. plan.ready is written
+    on the linked issue before any commit exists, so it is read from the issue
+    and bound to that issue instead."""
+    mr = os.environ.get("CI_MERGE_REQUEST_IID")
+    token = os.environ.get("VERIFIER_READONLY_TOKEN")
+    if not (mr and token):
+        return []
+    if claim_type == "plan.ready":
+        from scripts.gitlab_report import find_issue_iid
+
+        iid = find_issue_iid()
+        if iid is None:
+            return []
+        plans = [c for c in parse_claim_notes(_notes(f"issues/{iid}", token))
+                 if c["type"] == claim_type
+                 and str(c.get("subject", {}).get("issue_iid")) == str(iid)]
+        return plans[-1:]  # a re-planned issue: judge the latest plan
     head = os.environ.get("CI_COMMIT_SHA", "")
-    return [c for c in parse_claim_notes(r.json())
+    return [c for c in parse_claim_notes(_notes(f"merge_requests/{mr}", token))
             if c["type"] == claim_type
             and sha_matches(c.get("subject", {}).get("commit_sha"), head)]
 
@@ -150,10 +168,10 @@ def main(argv=None) -> int:
             name = f"{c['type']}.json" if len(claims) == 1 else f"{c['type']}.{i}.json"
             with open(os.path.join(args.out_dir, name), "w") as f:
                 json.dump(c, f, indent=2)
-        print(f"read {len(claims)} agent {args.type} claim(s) from MR notes")
+        print(f"read {len(claims)} agent {args.type} claim(s) from agent notes")
     else:
         FALLBACKS[args.type](args)
-        print(f"no agent {args.type} claim on the MR; synthesized a CI claim")
+        print(f"no agent {args.type} claim found; synthesized a CI claim")
     for name in sorted(os.listdir(args.out_dir)):
         if name.startswith(args.type):
             print(os.path.join(args.out_dir, name))

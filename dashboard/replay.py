@@ -172,7 +172,7 @@ text-transform:uppercase;letter-spacing:.06em}
 h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
 .gates{display:flex;flex-direction:column;gap:10px}
 .gate{position:relative;border:1px solid var(--line);border-radius:12px;padding:10px 12px;
-display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:center;opacity:.45;
+display:grid;grid-template-columns:64px 1fr auto;gap:10px;align-items:center;opacity:.45;
 transition:opacity .3s,border-color .3s,background .3s;overflow:hidden}
 .gate.active{opacity:1;border-color:var(--blue)}
 .gate.done{opacity:1}
