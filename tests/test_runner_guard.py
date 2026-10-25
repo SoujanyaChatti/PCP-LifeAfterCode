@@ -37,7 +37,7 @@ def test_check_targets_refuses_stale_or_wrong_builds(monkeypatch):
              "http://post": {"version": "c0", "secure_mode": True}}
 
     def get(url, timeout):
-        base = url.rsplit("/healthz", 1)[0]
+        base = url.rsplit("/health", 1)[0]
         return httpx.Response(200, json=state[base])
 
     monkeypatch.setattr(httpx, "get", get)

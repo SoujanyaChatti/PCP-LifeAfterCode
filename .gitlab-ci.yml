@@ -399,7 +399,7 @@ verify:deploy:
     - if: $GCP_PROJECT && $PCP_KIND == "main"
   script:
     # Real traffic, then wait for Cloud Monitoring to report it.
-    - for i in $(seq 1 30); do python -c "import httpx,sys;httpx.get(sys.argv[1]+'/healthz',timeout=10)" "$PROD_URL" || true; done
+    - for i in $(seq 1 30); do python -c "import httpx,sys;httpx.get(sys.argv[1]+'/health',timeout=10)" "$PROD_URL" || true; done
     - sleep 180
     - python -m verifier.run --claim claims/deploy.healthy.json --out evidence --live cloudrun
   artifacts:

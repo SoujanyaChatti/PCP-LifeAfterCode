@@ -2,7 +2,7 @@
 
 Staging services are reused across pipelines of the same MR, so a newer or
 older pipeline may have redeployed them. Each image bakes its commit SHA and
-mode into /healthz; this refuses to proceed unless the twin and the hardened
+mode into /health; this refuses to proceed unless the twin and the hardened
 build both report the commit under test and the expected mode.
 
     python -m redteam.check_targets --pre $STAGING_URL_PRE --post $STAGING_URL
@@ -20,7 +20,7 @@ import httpx
 def healthz(url: str, attempts: int = 10) -> dict:
     for i in range(attempts):
         try:
-            r = httpx.get(f"{url}/healthz", timeout=10.0)
+            r = httpx.get(f"{url}/health", timeout=10.0)
             if r.status_code == 200:
                 return r.json()
         except httpx.HTTPError:
@@ -32,7 +32,7 @@ def healthz(url: str, attempts: int = 10) -> dict:
 def check(url: str, commit: str, secure: bool) -> str | None:
     h = healthz(url)
     if not h:
-        return f"{url} is not answering /healthz"
+        return f"{url} is not answering /health"
     if h.get("version") != commit:
         return f"{url} serves commit {h.get('version')!r}, not {commit!r} (stale or racing deploy)"
     if bool(h.get("secure_mode")) != secure:
