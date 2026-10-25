@@ -81,6 +81,9 @@ def _dependency_report() -> dict:
     return {"python-multipart": version}
 
 
+# /health is what probes use: Cloud Run reserves paths ending in "z" (its
+# front end answers /healthz itself with a 404). /healthz stays for local use.
+@app.get("/health")
 @app.get("/healthz")
 def healthz() -> dict:
     return {

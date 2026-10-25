@@ -38,7 +38,7 @@ def test_v5_stacktrace_fixed():
 
 def test_v6_dependency_bumped():
     c = target_client()
-    deps = c.get("/healthz").json().get("deps", {})
+    deps = c.get("/health").json().get("deps", {})
     assert not deps.get("python-multipart", "").startswith("0.0.6")
 
 

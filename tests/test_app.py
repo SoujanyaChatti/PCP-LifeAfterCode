@@ -7,6 +7,13 @@ BOB = {"Authorization": "Bearer demo-token-bob-0002"}
 CAROL = {"Authorization": "Bearer demo-token-carol-admin-0003"}
 
 
+def test_health_is_served_where_cloud_run_lets_it_through():
+    # Cloud Run's front end swallows /healthz; probes must use /health.
+    c = make_client(secure=True)
+    r = c.get("/health")
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+
+
 def test_healthz():
     c = make_client(secure=True)
     r = c.get("/healthz")

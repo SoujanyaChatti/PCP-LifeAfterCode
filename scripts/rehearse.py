@@ -159,7 +159,7 @@ def step_deploy(work: str, digest: str) -> str:
     from tests.conftest import make_client
 
     client = make_client(True, db_path=os.path.join(work, "prod.db"), unpatched="")
-    probes = [client.get("/healthz").status_code for _ in range(5)]
+    probes = [client.get("/health").status_code for _ in range(5)]
     fx = os.path.join(work, "fx_deploy")
     os.makedirs(fx, exist_ok=True)
     with open(os.path.join(fx, "deploy.json"), "w") as f:

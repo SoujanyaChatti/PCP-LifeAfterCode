@@ -32,7 +32,7 @@ printf 'PROD_URL=%s\nPREV_REVISION=%s\n' "$URL" "$PREV" | tee prod.env
 
 GOOD=0
 for i in 1 2 3 4 5; do
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' "${URL}/healthz" || echo 000)
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' "${URL}/health" || echo 000)
   echo "probe $i: $CODE"
   [ "$CODE" = "200" ] && GOOD=$((GOOD+1))
   sleep 2

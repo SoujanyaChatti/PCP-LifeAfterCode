@@ -371,7 +371,7 @@ def deploy_health_probes_pass(claim, source, tol):
     good = sum(1 for c in probes if c == 200)
     ok = good >= n and len(probes) >= n
     return evidence("deploy.health_probes_pass", claim, source="http_probe",
-                    query=f"{n}x GET /healthz", raw_response={"probes": probes},
+                    query=f"{n}x GET /health", raw_response={"probes": probes},
                     observed={"probes": probes, "good": good, "required": n},
                     verdict=PASS if ok else (INCONCLUSIVE if not probes else FAIL),
                     reason=f"{good}/{n} probes returned 200")

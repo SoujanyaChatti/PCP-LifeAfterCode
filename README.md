@@ -130,7 +130,7 @@ run's own staging, and data is synthetic.
 | V3 | IDOR on `GET /notes/{id}` | Ownership check |
 | V4 | Admin route with no auth | Require admin role |
 | V5 | Stack trace leaked on 500 | Generic error handler |
-| V6 | Vulnerable dependency (python-multipart 0.0.6) | Patched version; `/healthz` reports the *installed* version |
+| V6 | Vulnerable dependency (python-multipart 0.0.6) | Patched version; `/health` reports the *installed* version |
 | V7 | Prompt injection in `/summarize` | Input/output guardrails |
 
 ## GitLab Duo Agent Platform

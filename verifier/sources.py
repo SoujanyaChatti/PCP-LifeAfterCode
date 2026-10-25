@@ -183,7 +183,7 @@ class GitLabSource:
         codes = []
         for _ in range(n):
             try:
-                codes.append(httpx.get(f"{url}/healthz", timeout=10.0).status_code)
+                codes.append(httpx.get(f"{url}/health", timeout=10.0).status_code)
             except Exception:
                 codes.append(0)
         return codes
@@ -292,7 +292,7 @@ class CloudRunSource:
         codes = []
         for _ in range(n):
             try:
-                codes.append(httpx.get(f"{url}/healthz", timeout=10.0).status_code)
+                codes.append(httpx.get(f"{url}/health", timeout=10.0).status_code)
             except Exception:
                 codes.append(0)
         return codes
